@@ -1,0 +1,23 @@
+[gemma]
+# Gemma 4 instruction model used by the Trust & Safety analysts.
+model = "gemma-4-26b-a4b-it"
+temperature = 0.2
+top_p = 0.9
+max_output_tokens = 2048
+
+[data]
+# Kaggle notebooks usually mount datasets under /kaggle/input.
+input_dir = "/kaggle/input/agentic-eval"
+sample_size = 0
+
+[pruning]
+alpha = 1.5
+beta = 1.0
+gamma = 0.5
+delta = 10.0
+prune_ratio = 0.45
+cache_threshold = 2
+priority_boost = 1.5
+
+[output]
+path = "/kaggle/working/submission.jsonl"
