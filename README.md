@@ -184,6 +184,11 @@ If you prefer a cell-by-cell notebook workflow, upload or copy
 into your Kaggle notebook. It includes cells for dataset detection, config-file
 creation, dry-run execution, benchmarking, and the real Gemma 4 run.
 
+If the first notebook cell shows `SRC_ROOT exists = False`, the repo source code
+is not available in the Kaggle runtime. Use the bootstrap cell in
+[`docs/kaggle_bootstrap.md`](docs/kaggle_bootstrap.md), or refresh the notebook
+from this branch so it can clone the repo automatically.
+
 ## Trust & Safety output schema
 
 Each processed Agentic Eval record produces JSON with:
