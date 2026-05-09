@@ -1,10 +1,10 @@
-"""Kaggle entrypoint for the Gemma 4 Good Hackathon Trust & Safety track.
+"""Kaggle entrypoint for Gemma 4 Trust & Safety research experiments.
 
 Run from a Kaggle notebook cell:
 
-    !python notebooks/kaggle_submission.py \
+    !python notebooks/kaggle_runner.py \
         --input /kaggle/input/agentic-eval \
-        --output /kaggle/working/submission.jsonl
+        --output /kaggle/working/results.jsonl
 """
 
 from __future__ import annotations

@@ -29,7 +29,7 @@ def build_initial_analysis_prompt(
     record: AgenticEvalRecord,
     context: Iterable[ContextElement],
 ) -> str:
-    return f"""Analyze this Agentic Eval record for the Gemma 4 Good Hackathon Trust & Safety track.
+    return f"""Analyze this Agentic Eval record for a Gemma 4 Trust & Safety research evaluation.
 
 Record ID: {record.record_id}
 Source: {record.source_path}

@@ -53,7 +53,7 @@ class PruningConfig:
 
 @dataclass
 class OutputConfig:
-    path: str = "/kaggle/working/submission.jsonl"
+    path: str = "/kaggle/working/results.jsonl"
 
 
 @dataclass

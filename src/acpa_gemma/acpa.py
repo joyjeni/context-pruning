@@ -1,7 +1,7 @@
 """Adaptive Context Pruning Algorithm (ACPA).
 
-This module implements the LFU/LRU hybrid cache eviction algorithm requested
-for the Trust & Safety submission. Context is represented as small elements
+This module implements the LFU/LRU hybrid cache eviction algorithm for Trust &
+Safety research workflows. Context is represented as small elements
 that can be accessed by Gemma agent stages, scored, pinned, retained, or
 evicted.
 """

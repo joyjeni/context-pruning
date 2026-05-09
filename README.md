@@ -1,10 +1,11 @@
 # Context Pruning for Gemma 4 Trust & Safety
 
-This repository contains a Kaggle-ready Trust & Safety prototype for the
-[Gemma 4 Good Hackathon](https://www.kaggle.com/competitions/gemma-4-good-hackathon).
-It uses Gemma 4 as the reasoning model, the Kaggle Agentic Eval dataset as the
-evaluation input, and an Adaptive Context Pruning Algorithm (ACPA) to keep
-agentic safety reviews grounded while reducing noisy context.
+This repository contains a reusable Trust & Safety research prototype for
+agentic AI evaluation. It uses Gemma 4 as the reasoning model, Agentic Eval data
+as the evaluation input, and an Adaptive Context Pruning Algorithm (ACPA) to
+keep agentic safety reviews grounded while reducing noisy context. The project
+is structured for hackathon demos, reproducible experiments, and peer-reviewed
+publication artifacts.
 
 ## What this builds
 
@@ -13,7 +14,8 @@ agentic safety reviews grounded while reducing noisy context.
   LFU/LRU hybrid cache eviction and pinned citation/dependency preservation.
 - A Gemma 4 client that reads API keys from config files instead of hard-coding
   secrets.
-- A flexible Agentic Eval dataset loader for Kaggle input directories.
+- A flexible Agentic Eval dataset loader for local files or Kaggle input
+  directories.
 - A Kaggle notebook entrypoint and a Mermaid architecture diagram.
 
 ## Architecture
@@ -31,7 +33,7 @@ flowchart LR
     F --> D
     D --> G[Gemma 4 Adjudicator]
     G --> H[Trust & Safety Findings]
-    H --> I[submission.jsonl / demo output]
+    H --> I[results.jsonl / demo output]
 ```
 
 ## Repository layout
@@ -43,7 +45,7 @@ configs/
 docs/
   architecture.md        # Mermaid architecture diagram and design notes
 notebooks/
-  kaggle_submission.py   # Kaggle notebook/script entrypoint
+  kaggle_runner.py       # Kaggle notebook/script entrypoint
 src/acpa_gemma/
   acpa.py                # Adaptive Context Pruning Algorithm
   cli.py                 # Command-line runner
@@ -96,7 +98,7 @@ python3 -m acpa_gemma.cli \
   --config configs/app.toml \
   --secrets configs/secrets.toml \
   --input /kaggle/input/agentic-eval \
-  --output outputs/submission.jsonl
+  --output outputs/results.jsonl
 ```
 
 For a no-network smoke test:
@@ -142,7 +144,7 @@ Benchmark metrics include:
 
 ## Kaggle usage
 
-1. Create a Kaggle notebook for the Gemma 4 Good Hackathon.
+1. Create a Kaggle notebook or research experiment notebook.
 2. Attach the Agentic Eval dataset to the notebook.
 3. Upload or clone this repository.
 4. Copy `configs/secrets.example.toml` to
@@ -150,9 +152,9 @@ Benchmark metrics include:
 5. Run:
 
 ```bash
-python3 notebooks/kaggle_submission.py \
+python3 notebooks/kaggle_runner.py \
   --input /kaggle/input/agentic-eval \
-  --output /kaggle/working/submission.jsonl
+  --output /kaggle/working/results.jsonl
 ```
 
 If you prefer a cell-by-cell notebook workflow, upload or copy
@@ -172,7 +174,7 @@ Each processed Agentic Eval record produces JSON with:
 - `mitigations`: actionable safety controls.
 - `acpa_stats`: pruning and dependency-preservation telemetry.
 
-## Why ACPA for this track
+## Why ACPA for Trust & Safety research
 
 Agentic safety traces can be long and noisy. ACPA keeps frequently used,
 important, recent, and citation-bearing context while evicting cold context.

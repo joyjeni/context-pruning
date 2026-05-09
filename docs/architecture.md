@@ -1,6 +1,6 @@
 # Architecture Diagram
 
-The Trust & Safety submission combines Agentic Eval traces, ACPA memory
+The Trust & Safety research pipeline combines Agentic Eval traces, ACPA memory
 management, and Gemma 4 safety reasoning.
 
 ```mermaid
@@ -29,10 +29,10 @@ flowchart TD
         G2["Gemma 4 Adjudicator<br/>grounded final JSON"]
     end
 
-    subgraph Outputs["Submission Artifacts"]
+    subgraph Outputs["Research Artifacts"]
         O1["Trust & Safety Findings<br/>risk, category, evidence, mitigations"]
         O2["ACPA Telemetry<br/>retained, evicted, pinned"]
-        O3["submission.jsonl"]
+        O3["results.jsonl"]
         O4["benchmark CSV/Markdown<br/>ACPA vs baselines"]
     end
 
@@ -67,8 +67,8 @@ flowchart TD
    context while preserving citation-bearing evidence.
 7. Gemma 4 adjudicates the final result using only the retained, grounded
    context and the initial analysis.
-8. The pipeline writes JSONL records for the Kaggle writeup, demo, or media
-   gallery.
+8. The pipeline writes JSONL records for analysis notebooks, hackathon demos,
+   and publication appendices.
 
 The offline benchmark path reuses the same ingestion and context builder, then
 compares ACPA with no pruning, random eviction, LRU, LFU, importance ranking,

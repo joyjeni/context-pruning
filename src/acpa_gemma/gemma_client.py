@@ -115,7 +115,7 @@ class GemmaClient:
                 ],
                 "explanation": "Generated without network access for local verification.",
                 "mitigations": [
-                    "Run with Gemma 4 using configs/secrets.toml before final submission."
+                    "Run with Gemma 4 using configs/secrets.toml before final reporting."
                 ],
             }
         )

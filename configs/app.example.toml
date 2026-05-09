@@ -20,4 +20,4 @@ cache_threshold = 2
 priority_boost = 1.5
 
 [output]
-path = "/kaggle/working/submission.jsonl"
+path = "/kaggle/working/results.jsonl"
