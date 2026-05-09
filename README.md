@@ -47,6 +47,7 @@ notebooks/
   kaggle_submission.py   # Kaggle notebook/script entrypoint
 src/acpa_gemma/
   acpa.py                # Adaptive Context Pruning Algorithm
+  benchmark.py           # Offline ACPA-vs-baseline pruning benchmark
   cli.py                 # Command-line runner
   config.py              # Config and secret loading
   data.py                # Agentic Eval dataset loader
@@ -104,6 +105,17 @@ For a no-network smoke test:
 
 ```bash
 python3 -m acpa_gemma.cli --dry-run --sample-size 3 --output outputs/dry_run.jsonl
+```
+
+For an offline pruning benchmark:
+
+```bash
+python3 -m acpa_gemma.benchmark \
+  --input /kaggle/input/agentic-eval \
+  --sample-size 100 \
+  --details-output outputs/benchmark_details.csv \
+  --summary-output outputs/benchmark_summary.csv \
+  --report-output outputs/benchmark_report.md
 ```
 
 ## Kaggle usage
