@@ -43,6 +43,7 @@ configs/
 docs/
   architecture.md        # Mermaid architecture diagram and design notes
 notebooks/
+  context_pruning_kaggle_runner.ipynb  # Kaggle Run All notebook with diagnostics
   kaggle_submission.py   # Kaggle notebook/script entrypoint
 src/acpa_gemma/
   acpa.py                # Adaptive Context Pruning Algorithm
@@ -119,6 +120,12 @@ python3 notebooks/kaggle_submission.py \
   --input /kaggle/input/agentic-eval \
   --output /kaggle/working/submission.jsonl
 ```
+
+You can also use `notebooks/context_pruning_kaggle_runner.ipynb` inside
+Kaggle. Its dataset locator prints attached input diagnostics and continues
+with a demo record for dry-run/benchmark cells when only placeholder files such
+as `NOTE.md` are present; attach the real Agentic Eval records before running
+the live Gemma API cell.
 
 ## Trust & Safety output schema
 
