@@ -88,11 +88,11 @@ No API key is committed to this repository.
 ## Local usage
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-python -m acpa_gemma.cli \
+python3 -m acpa_gemma.cli \
   --config configs/app.toml \
   --secrets configs/secrets.toml \
   --input /kaggle/input/agentic-eval \
@@ -102,7 +102,7 @@ python -m acpa_gemma.cli \
 For a no-network smoke test:
 
 ```bash
-python -m acpa_gemma.cli --dry-run --sample-size 3 --output outputs/dry_run.jsonl
+python3 -m acpa_gemma.cli --dry-run --sample-size 3 --output outputs/dry_run.jsonl
 ```
 
 ## Kaggle usage
@@ -115,7 +115,7 @@ python -m acpa_gemma.cli --dry-run --sample-size 3 --output outputs/dry_run.json
 5. Run:
 
 ```bash
-python notebooks/kaggle_submission.py \
+python3 notebooks/kaggle_submission.py \
   --input /kaggle/input/agentic-eval \
   --output /kaggle/working/submission.jsonl
 ```
