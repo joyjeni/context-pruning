@@ -147,9 +147,27 @@ Benchmark metrics include:
 1. Create a Kaggle notebook or research experiment notebook.
 2. Attach the Agentic Eval dataset to the notebook.
 3. Upload or clone this repository.
-4. Copy `configs/secrets.example.toml` to
-   `/kaggle/working/configs/secrets.toml` and add your Gemma API key.
-5. Run:
+4. Add your Google AI Studio / Gemini key using **Kaggle Secrets**:
+   - Open the notebook right sidebar.
+   - Click **Add-ons**.
+   - Click **Secrets**.
+   - Add label `GEMINI_API_KEY`.
+   - Paste your API key as the value.
+   - Enable notebook access for the secret.
+5. Verify the secret in a Kaggle notebook cell:
+
+```python
+from kaggle_secrets import UserSecretsClient
+
+secret_label = "GEMINI_API_KEY"
+secret_value = UserSecretsClient().get_secret(secret_label)
+
+print("API key loaded:", bool(secret_value))
+```
+
+Do not print `secret_value` itself.
+
+6. Run:
 
 ```bash
 python3 notebooks/kaggle_runner.py \
