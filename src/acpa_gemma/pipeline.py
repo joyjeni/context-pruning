@@ -11,7 +11,9 @@ from acpa_gemma.config import AppConfig
 from acpa_gemma.data import (
     AgenticEvalRecord,
     build_context_elements,
+    dataset_diagnostics,
     extract_citations,
+    format_dataset_diagnostics,
     load_agentic_eval_dataset,
 )
 from acpa_gemma.gemma_client import GemmaClient
@@ -104,9 +106,18 @@ class TrustSafetyPipeline:
         output_path: str | None = None,
         sample_size: int | None = None,
     ) -> List[Dict]:
-        records = self.load_records(input_dir=input_dir, sample_size=sample_size)
+        resolved_input = input_dir or self.config.data.input_dir
+        records = self.load_records(input_dir=resolved_input, sample_size=sample_size)
         if self.dry_run and not records:
             records = demo_records()
+        elif not records:
+            diagnostics = dataset_diagnostics(resolved_input)
+            raise RuntimeError(
+                "No Agentic Eval records were loaded. Check that the dataset is "
+                "attached and that --input points to the directory containing "
+                "CSV, JSON, JSONL, NDJSON, or Parquet files.\n\n"
+                + format_dataset_diagnostics(diagnostics)
+            )
 
         outputs = self.process_records(records)
         path = Path(output_path or self.config.output.path)

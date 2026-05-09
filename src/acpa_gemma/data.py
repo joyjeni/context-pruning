@@ -17,7 +17,8 @@ except ModuleNotFoundError:  # pragma: no cover
     pd = None  # type: ignore[assignment]
 
 
-SUPPORTED_SUFFIXES = {".csv", ".json", ".jsonl", ".parquet"}
+SUPPORTED_SUFFIXES = {".csv", ".json", ".jsonl", ".ndjson", ".parquet"}
+JSON_ROW_KEYS = ["data", "records", "examples", "rows", "items"]
 
 PROMPT_FIELDS = ["prompt", "instruction", "query", "question", "user_prompt", "task"]
 RESPONSE_FIELDS = ["response", "answer", "completion", "output", "assistant_response"]
@@ -85,11 +86,18 @@ def load_agentic_eval_dataset(
 
     records: List[AgenticEvalRecord] = []
     for data_file in discover_dataset_files(root):
-        for row_index, row in enumerate(read_rows(data_file)):
-            record = normalize_row(row, row_index=row_index, source_path=data_file)
-            records.append(record)
-            if sample_size and len(records) >= sample_size:
-                return records
+        try:
+            for row_index, row in enumerate(read_rows(data_file)):
+                record = normalize_row(row, row_index=row_index, source_path=data_file)
+                if record.combined_text().strip() or record.raw:
+                    records.append(record)
+                if sample_size and len(records) >= sample_size:
+                    return records
+        except Exception:
+            # Dataset folders can contain metadata files with supported
+            # extensions. Skip unreadable files and let diagnostics report the
+            # discovered paths if no records are loaded.
+            continue
     return records
 
 
@@ -109,13 +117,13 @@ def discover_dataset_files(input_dir: str | Path) -> List[Path]:
 
 def read_rows(path: Path) -> Iterator[Dict[str, Any]]:
     suffix = path.suffix.lower()
-    if pd is not None and suffix in {".csv", ".json", ".jsonl", ".parquet"}:
+    if pd is not None and suffix in {".csv", ".json", ".jsonl", ".ndjson", ".parquet"}:
         if suffix == ".csv":
             frame = pd.read_csv(path)
         elif suffix == ".parquet":
             frame = pd.read_parquet(path)
         else:
-            frame = pd.read_json(path, lines=suffix == ".jsonl")
+            frame = pd.read_json(path, lines=suffix in {".jsonl", ".ndjson"})
         for row in frame.to_dict(orient="records"):
             yield {str(key): value for key, value in row.items()}
         return
@@ -123,7 +131,7 @@ def read_rows(path: Path) -> Iterator[Dict[str, Any]]:
     if suffix == ".csv":
         with path.open(newline="", encoding="utf-8") as handle:
             yield from csv.DictReader(handle)
-    elif suffix == ".jsonl":
+    elif suffix in {".jsonl", ".ndjson"}:
         with path.open(encoding="utf-8") as handle:
             for line in handle:
                 if line.strip():
@@ -131,12 +139,71 @@ def read_rows(path: Path) -> Iterator[Dict[str, Any]]:
     elif suffix == ".json":
         with path.open(encoding="utf-8") as handle:
             payload = json.load(handle)
-        rows = payload if isinstance(payload, list) else payload.get("data", [])
+        rows = extract_json_rows(payload)
         for row in rows:
             if isinstance(row, dict):
                 yield row
     else:
         raise ValueError(f"Unsupported dataset file without pandas: {path}")
+
+
+def extract_json_rows(payload: Any) -> List[Dict[str, Any]]:
+    """Extract row dictionaries from common JSON dataset shapes."""
+
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in JSON_ROW_KEYS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [row for row in value if isinstance(row, dict)]
+    # Treat a single JSON object as a one-row dataset.
+    return [payload] if payload else []
+
+
+def dataset_diagnostics(input_dir: str | Path, max_files: int = 25) -> Dict[str, Any]:
+    """Return human-readable diagnostics for Kaggle dataset loading."""
+
+    root = Path(input_dir)
+    exists = root.exists()
+    all_files: List[Path] = []
+    if exists:
+        if root.is_file():
+            all_files = [root]
+        else:
+            all_files = sorted([path for path in root.rglob("*") if path.is_file()])
+    supported_files = [
+        path for path in all_files if path.suffix.lower() in SUPPORTED_SUFFIXES
+    ]
+    return {
+        "input_dir": str(root),
+        "exists": exists,
+        "total_files": len(all_files),
+        "supported_files": len(supported_files),
+        "supported_suffixes": sorted(SUPPORTED_SUFFIXES),
+        "sample_supported_files": [str(path) for path in supported_files[:max_files]],
+        "sample_all_files": [str(path) for path in all_files[:max_files]],
+    }
+
+
+def format_dataset_diagnostics(diagnostics: Dict[str, Any]) -> str:
+    lines = [
+        f"input_dir={diagnostics['input_dir']}",
+        f"exists={diagnostics['exists']}",
+        f"total_files={diagnostics['total_files']}",
+        f"supported_files={diagnostics['supported_files']}",
+        f"supported_suffixes={diagnostics['supported_suffixes']}",
+        "sample_supported_files:",
+    ]
+    lines.extend(f"  - {path}" for path in diagnostics["sample_supported_files"])
+    if not diagnostics["sample_supported_files"]:
+        lines.append("  (none)")
+    lines.append("sample_all_files:")
+    lines.extend(f"  - {path}" for path in diagnostics["sample_all_files"])
+    if not diagnostics["sample_all_files"]:
+        lines.append("  (none)")
+    return "\n".join(lines)
 
 
 def normalize_row(
