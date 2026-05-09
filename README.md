@@ -155,6 +155,11 @@ python3 notebooks/kaggle_submission.py \
   --output /kaggle/working/submission.jsonl
 ```
 
+If you prefer a cell-by-cell notebook workflow, upload or copy
+[`notebooks/context_pruning_kaggle_runner.ipynb`](notebooks/context_pruning_kaggle_runner.ipynb)
+into your Kaggle notebook. It includes cells for dataset detection, config-file
+creation, dry-run execution, benchmarking, and the real Gemma 4 run.
+
 ## Trust & Safety output schema
 
 Each processed Agentic Eval record produces JSON with:
