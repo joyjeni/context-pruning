@@ -167,7 +167,11 @@ print("API key loaded:", bool(secret_value))
 
 Do not print `secret_value` itself.
 
-6. Run:
+6. If you are using `notebooks/context_pruning_kaggle_runner.ipynb`, run the
+   first setup cell. It will clone this repository into
+   `/kaggle/working/context-pruning` when `src/acpa_gemma` is not already
+   present. Enable Kaggle notebook internet for that automatic clone path.
+7. Run:
 
 ```bash
 python3 notebooks/kaggle_runner.py \
