@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acpa-gemma-trust-safety"
+version = "0.1.0"
+description = "Gemma 4 Trust & Safety pipeline with Adaptive Context Pruning for Kaggle Agentic Eval data"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Context Pruning Contributors" }]
+dependencies = [
+    "google-genai>=1.15.0",
+    "pandas>=2.2.0",
+    "pyarrow>=16.0.0",
+    "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+acpa-gemma = "acpa_gemma.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
