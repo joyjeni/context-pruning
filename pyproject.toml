@@ -23,6 +23,7 @@ dev = [
 
 [project.scripts]
 acpa-gemma = "acpa_gemma.cli:main"
+acpa-gemma-benchmark = "acpa_gemma.benchmark:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

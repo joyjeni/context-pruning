@@ -33,6 +33,7 @@ flowchart TD
         O1["Trust & Safety Findings<br/>risk, category, evidence, mitigations"]
         O2["ACPA Telemetry<br/>retained, evicted, pinned"]
         O3["submission.jsonl"]
+        O4["benchmark CSV/Markdown<br/>ACPA vs baselines"]
     end
 
     D1 --> L1 --> N1 --> B1 --> M1
@@ -48,6 +49,8 @@ flowchart TD
     E1 --> O2
     O1 --> O3
     O2 --> O3
+    B1 --> O4
+    E1 --> O4
 ```
 
 ## Data flow
@@ -66,6 +69,11 @@ flowchart TD
    context and the initial analysis.
 8. The pipeline writes JSONL records for the Kaggle writeup, demo, or media
    gallery.
+
+The offline benchmark path reuses the same ingestion and context builder, then
+compares ACPA with no pruning, random eviction, LRU, LFU, importance ranking,
+and sliding-window truncation. It writes per-record CSV details plus an
+aggregate Markdown report without calling Gemma or requiring API keys.
 
 ## ACPA scoring
 

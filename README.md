@@ -105,6 +105,41 @@ For a no-network smoke test:
 python3 -m acpa_gemma.cli --dry-run --sample-size 3 --output outputs/dry_run.jsonl
 ```
 
+## Benchmark ACPA against baseline pruning
+
+The benchmark runner does **not** require an API key. It compares ACPA with
+existing/common context pruning strategies:
+
+- no pruning
+- random eviction
+- LRU
+- LFU
+- importance-score ranking
+- sliding-window truncation
+- ACPA LFU/LRU/dependency pruning
+
+Run locally or in Kaggle:
+
+```bash
+PYTHONPATH=src python3 -m acpa_gemma.benchmark \
+  --input /kaggle/input/agentic-eval \
+  --sample-size 100 \
+  --details-output outputs/benchmark_details.csv \
+  --summary-output outputs/benchmark_summary.csv \
+  --report-output outputs/benchmark_report.md
+```
+
+If the Agentic Eval dataset is not present, the command falls back to the demo
+record so you can still verify the code path.
+
+Benchmark metrics include:
+
+- context retention ratio
+- token-reduction proxy
+- citation/dependency preservation rate
+- safety-keyword preservation rate
+- retained-importance lift
+
 ## Kaggle usage
 
 1. Create a Kaggle notebook for the Gemma 4 Good Hackathon.
