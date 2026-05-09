@@ -187,7 +187,14 @@ creation, dry-run execution, benchmarking, and the real Gemma 4 run.
 If the first notebook cell shows `SRC_ROOT exists = False`, the repo source code
 is not available in the Kaggle runtime. Use the bootstrap cell in
 [`docs/kaggle_bootstrap.md`](docs/kaggle_bootstrap.md), or refresh the notebook
-from this branch so it can clone the repo automatically.
+from this branch so it can clone the repo automatically. The current notebook
+first cell follows the direct clone workflow:
+
+```text
+git clone --depth 1 --branch cursor/gemma-acpa-trust-safety-44f2 \
+  https://github.com/joyjeni/context-pruning.git \
+  /kaggle/working/context-pruning
+```
 
 ## Trust & Safety output schema
 

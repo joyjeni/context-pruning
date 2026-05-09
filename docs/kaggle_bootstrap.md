@@ -9,7 +9,8 @@ Kaggle input exists = True
 ```
 
 then the Kaggle notebook is running without the repository source code. Replace
-the first setup cell with this code and rerun it.
+the first setup cell with this code, turn Kaggle notebook Internet on, and rerun
+from the top.
 
 ```python
 from pathlib import Path
@@ -19,47 +20,38 @@ import shutil
 import subprocess
 import sys
 
-REPO_URL = "https://github.com/joyjeni/context-pruning.git"
-REPO_BRANCH = "cursor/gemma-acpa-trust-safety-44f2"
-CLONE_DIR = Path("/kaggle/working/context-pruning")
+REPO_URL = 'https://github.com/joyjeni/context-pruning.git'
+REPO_BRANCH = 'cursor/gemma-acpa-trust-safety-44f2'
+REPO_ROOT = Path('/kaggle/working/context-pruning')
+SRC_ROOT = REPO_ROOT / 'src'
 
-possible_roots = [
-    Path.cwd(),
-    CLONE_DIR,
-    Path("/kaggle/input/context-pruning"),
-]
-
-REPO_ROOT = next((path for path in possible_roots if (path / "src/acpa_gemma").exists()), None)
-
-if REPO_ROOT is None:
-    print("Repository source not found. Cloning into", CLONE_DIR)
-    if CLONE_DIR.exists() and CLONE_DIR.name == "context-pruning":
-        print("Removing stale clone directory:", CLONE_DIR)
-        shutil.rmtree(CLONE_DIR)
+if not (SRC_ROOT / 'acpa_gemma').exists():
+    if REPO_ROOT.exists():
+        print('Removing stale repo directory:', REPO_ROOT)
+        shutil.rmtree(REPO_ROOT)
+    print('Cloning repository branch:', REPO_BRANCH)
     try:
         subprocess.run(
             [
-                "git",
-                "clone",
-                "--depth",
-                "1",
-                "--branch",
+                'git',
+                'clone',
+                '--depth',
+                '1',
+                '--branch',
                 REPO_BRANCH,
                 REPO_URL,
-                str(CLONE_DIR),
+                str(REPO_ROOT),
             ],
             check=True,
         )
     except Exception as exc:
         raise RuntimeError(
-            "Could not clone the repository. In Kaggle, turn Internet ON in "
-            "Notebook settings, then rerun this cell. If Internet is disabled, "
-            "upload the repository as a Kaggle dataset and set REPO_ROOT to that path."
+            'Could not clone the repository. Turn Kaggle Notebook Internet ON, '
+            'then rerun from the first cell. If Internet is disabled, upload the '
+            'repo as a Kaggle dataset and set REPO_ROOT to that dataset path.'
         ) from exc
-    REPO_ROOT = CLONE_DIR
 
-SRC_ROOT = REPO_ROOT / "src"
-if not (SRC_ROOT / "acpa_gemma").exists():
+if not (SRC_ROOT / 'acpa_gemma').exists():
     raise RuntimeError(f"acpa_gemma source package not found under {SRC_ROOT}")
 
 if str(SRC_ROOT) not in sys.path:
@@ -67,8 +59,11 @@ if str(SRC_ROOT) not in sys.path:
 
 print("REPO_ROOT =", REPO_ROOT)
 print("SRC_ROOT exists =", SRC_ROOT.exists())
-print("acpa_gemma exists =", (SRC_ROOT / "acpa_gemma").exists())
+print("acpa_gemma exists =", (SRC_ROOT / 'acpa_gemma').exists())
 print("Kaggle input exists =", Path("/kaggle/input").exists())
+
+import acpa_gemma
+print("Imported acpa_gemma from:", acpa_gemma.__file__)
 ```
 
 Expected output:
