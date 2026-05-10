@@ -6,8 +6,8 @@ top_p = 0.9
 max_output_tokens = 2048
 
 [data]
-# Kaggle notebooks usually mount datasets under /kaggle/input.
-input_dir = "/kaggle/input/agentic-eval"
+# Kaggle auto-mounts mukundakatta/agent-eval-scenarios here after Add data/Input.
+input_dir = "/kaggle/input/agent-eval-scenarios"
 sample_size = 0
 
 [pruning]

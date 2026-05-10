@@ -3,7 +3,7 @@
 Run from a Kaggle notebook cell:
 
     !python notebooks/kaggle_runner.py \
-        --input /kaggle/input/agentic-eval \
+        --input /kaggle/input/agent-eval-scenarios \
         --output /kaggle/working/results.jsonl
 """
 

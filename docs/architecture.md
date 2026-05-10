@@ -6,7 +6,7 @@ management, and Gemma 4 safety reasoning.
 ```mermaid
 flowchart TD
     subgraph Kaggle["Kaggle Runtime"]
-        D1["Agentic Eval Dataset<br/>/kaggle/input/agentic-eval"]
+        D1["AgentEval Dataset<br/>/kaggle/input/agent-eval-scenarios"]
         C1["Config Files<br/>configs/app.toml<br/>configs/secrets.toml"]
     end
 
@@ -55,8 +55,8 @@ flowchart TD
 
 ## Data flow
 
-1. The Kaggle notebook mounts the Agentic Eval dataset under
-   `/kaggle/input/agentic-eval`.
+1. The Kaggle notebook mounts the AgentEval dataset under
+   `/kaggle/input/agent-eval-scenarios`.
 2. The loader discovers supported tabular files and normalizes each row into an
    `AgenticEvalRecord`.
 3. The context builder splits prompts, trajectories, tool calls, responses, and
