@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from acpa_gemma import benchmark
 from acpa_gemma.benchmark import run_benchmark, write_csv, write_markdown_report
 from acpa_gemma.pipeline import demo_records
 
@@ -29,3 +32,19 @@ def test_benchmark_writes_csv_and_markdown(tmp_path: Path):
     assert "policy,record_id" in details.read_text(encoding="utf-8")
     assert "policy,records" in summary.read_text(encoding="utf-8")
     assert "Pruning Benchmark Report" in report.read_text(encoding="utf-8")
+
+
+def test_benchmark_raises_clear_error_for_empty_dataset(tmp_path: Path):
+    with pytest.raises(RuntimeError, match="No AgentEval records were loaded"):
+        benchmark.main(
+            [
+                "--input",
+                str(tmp_path),
+                "--details-output",
+                str(tmp_path / "details.csv"),
+                "--summary-output",
+                str(tmp_path / "summary.csv"),
+                "--report-output",
+                str(tmp_path / "report.md"),
+            ]
+        )
