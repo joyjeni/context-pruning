@@ -32,8 +32,12 @@ def test_generate_json_extracts_json_from_extra_text():
     assert client.generate_json("prompt") == {"risk_level": "medium"}
 
 
-def test_generate_json_reports_non_json_output():
+def test_generate_json_reports_non_json_output(capsys):
     client = FakeGemmaClient("I cannot comply.")
 
     with pytest.raises(ValueError, match="Gemma output must be a JSON object"):
         client.generate_json("prompt")
+
+    captured = capsys.readouterr()
+    assert "DEBUG RAW GEMMA OUTPUT:" in captured.out
+    assert "I cannot comply." in captured.out
