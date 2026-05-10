@@ -97,7 +97,7 @@ pip install -e ".[dev]"
 python3 -m acpa_gemma.cli \
   --config configs/app.toml \
   --secrets configs/secrets.toml \
-  --input /kaggle/input/agentic-eval \
+  --input /kaggle/input/agent-eval-scenarios \
   --output outputs/submission.jsonl
 ```
 
@@ -111,7 +111,7 @@ For an offline pruning benchmark:
 
 ```bash
 python3 -m acpa_gemma.benchmark \
-  --input /kaggle/input/agentic-eval \
+  --input /kaggle/input/agent-eval-scenarios \
   --sample-size 100 \
   --details-output outputs/benchmark_details.csv \
   --summary-output outputs/benchmark_summary.csv \
@@ -121,7 +121,9 @@ python3 -m acpa_gemma.benchmark \
 ## Kaggle usage
 
 1. Create a Kaggle notebook for the Gemma 4 Good Hackathon.
-2. Attach the Agentic Eval dataset to the notebook.
+2. Attach `mukundakatta/agent-eval-scenarios` to the notebook with
+   **Add data** / **Input**. Kaggle mounts it at
+   `/kaggle/input/agent-eval-scenarios/`.
 3. Upload or clone this repository.
 4. Copy `configs/secrets.example.toml` to
    `/kaggle/working/configs/secrets.toml` and add your Gemma API key.
@@ -129,7 +131,7 @@ python3 -m acpa_gemma.benchmark \
 
 ```bash
 python3 notebooks/kaggle_submission.py \
-  --input /kaggle/input/agentic-eval \
+  --input /kaggle/input/agent-eval-scenarios \
   --output /kaggle/working/submission.jsonl
 ```
 

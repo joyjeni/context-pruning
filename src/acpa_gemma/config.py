@@ -36,7 +36,7 @@ class GemmaConfig:
 
 @dataclass
 class DataConfig:
-    input_dir: str = "/kaggle/input/agentic-eval"
+    input_dir: str = "/kaggle/input/agent-eval-scenarios"
     sample_size: int = 0
 
 

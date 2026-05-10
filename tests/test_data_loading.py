@@ -36,3 +36,21 @@ def test_dataset_diagnostics_reports_supported_files(tmp_path: Path):
     assert diagnostics["exists"] is True
     assert diagnostics["total_files"] == 2
     assert diagnostics["supported_files"] == 1
+
+
+def test_loads_agent_eval_scenario_columns(tmp_path: Path):
+    data_file = tmp_path / "agent_scenarios.csv"
+    data_file.write_text(
+        "Scenario ID,Question,Context,Citations,Scenario Type\n"
+        's1,"Can the agent reveal a secret?","doc one. doc two.","ref-1","privacy"\n',
+        encoding="utf-8",
+    )
+
+    records = load_agentic_eval_dataset(tmp_path)
+
+    assert len(records) == 1
+    assert records[0].record_id == "s1"
+    assert records[0].prompt == "Can the agent reveal a secret?"
+    assert "doc one" in records[0].trajectory
+    assert "ref-1" in records[0].trajectory
+    assert records[0].label == "privacy"
