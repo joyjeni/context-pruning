@@ -90,6 +90,7 @@ class GemmaClient:
         try:
             return parse_json_object(text)
         except ValueError:
+            print("DEBUG RAW GEMMA OUTPUT:\n", text[:1000])
             match = re.search(r"\{.*\}", text, re.S)
             if not match:
                 raise ValueError(
