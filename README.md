@@ -118,6 +118,9 @@ python3 -m acpa_gemma.benchmark \
   --report-output outputs/benchmark_report.md
 ```
 
+The benchmark requires attached AgentEval records. It fails fast with dataset
+diagnostics instead of falling back to demo or synthetic data.
+
 ## Kaggle usage
 
 1. Create a Kaggle notebook for the Gemma 4 Good Hackathon.
@@ -136,10 +139,10 @@ python3 notebooks/kaggle_submission.py \
 ```
 
 You can also use `notebooks/context_pruning_kaggle_runner.ipynb` inside
-Kaggle. Its dataset locator prints attached input diagnostics and continues
-with a demo record for dry-run/benchmark cells when only placeholder files such
-as `NOTE.md` are present; attach the real Agentic Eval records before running
-the live Gemma API cell.
+Kaggle. Its dataset locator prints attached input diagnostics, prefers
+`/kaggle/input/agent-eval-scenarios`, and stops dry-run/benchmark/real cells
+until real AgentEval records are attached. It also patches the notebook runtime
+with robust Gemma JSON parsing before pipeline calls.
 
 ## Trust & Safety output schema
 
