@@ -24,6 +24,10 @@ from acpa_gemma.prompts import (
 )
 
 
+class PipelineInputError(RuntimeError):
+    """Raised when the configured dataset input cannot produce records."""
+
+
 class TrustSafetyPipeline:
     """Runs two Gemma 4 agent stages with ACPA between them."""
 
@@ -112,7 +116,7 @@ class TrustSafetyPipeline:
             records = demo_records()
         elif not records:
             diagnostics = dataset_diagnostics(resolved_input)
-            raise RuntimeError(
+            raise PipelineInputError(
                 "No Agentic Eval records were loaded. Check that the dataset is "
                 "attached and that --input points to the directory containing "
                 "CSV, JSON, JSONL, NDJSON, or Parquet files.\n\n"

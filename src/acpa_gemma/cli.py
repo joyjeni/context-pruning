@@ -6,10 +6,12 @@ import argparse
 import json
 import logging
 from pathlib import Path
+import sys
 from typing import List
 
 from acpa_gemma.config import load_config
-from acpa_gemma.pipeline import TrustSafetyPipeline
+from acpa_gemma.gemma_client import GemmaGenerationError
+from acpa_gemma.pipeline import PipelineInputError, TrustSafetyPipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -54,13 +56,29 @@ def main(argv: List[str] | None = None) -> int:
         secret_paths=[Path(path) for path in args.secrets] if args.secrets else None,
     )
     pipeline = TrustSafetyPipeline(config=config, dry_run=args.dry_run)
-    outputs = pipeline.run_to_file(
-        input_dir=args.input,
-        output_path=args.output,
-        sample_size=args.sample_size,
-    )
-
     output_path = args.output or config.output.path
+    try:
+        outputs = pipeline.run_to_file(
+            input_dir=args.input,
+            output_path=args.output,
+            sample_size=args.sample_size,
+        )
+    except (PipelineInputError, GemmaGenerationError) as exc:
+        print(
+            json.dumps(
+                {
+                    "error": str(exc),
+                    "output_path": output_path,
+                    "model": config.gemma.model,
+                    "loaded_config_files": config.loaded_files,
+                    "dry_run": args.dry_run,
+                },
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
     print(
         json.dumps(
             {
