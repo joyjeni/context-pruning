@@ -18,6 +18,9 @@ from statistics import mean
 from typing import Any, Dict, Iterable, Iterator, List, Sequence, Set, Tuple
 import zipfile
 
+from acpa_gemma.config import load_config
+from acpa_gemma.gemma_client import GemmaClient
+
 
 CUAD_DATA_URL = "https://github.com/TheAtticusProject/cuad/raw/main/data.zip"
 DEFAULT_CUAD_MEMBER = "CUADv1.json"
@@ -123,6 +126,38 @@ class CuadDetailRow:
     retained_gold_section_ids: str
     citation_preserved: bool
     answer_quality: float
+
+
+@dataclass
+class CuadGemmaDetailRow:
+    policy: str
+    prune_ratio: float
+    contract_id: str
+    question_id: str
+    retained_section_count: int
+    gold_answers: str
+    generated_answer: str
+    generated_citations: str
+    citation_preserved: bool
+    answer_quality: float
+
+
+@dataclass
+class CuadGemmaSummaryRow:
+    policy: str
+    policy_family: str
+    prune_ratio: float
+    questions: int
+    avg_retained_sections: float
+    citation_accuracy: float
+    gemma_answer_quality: float
+    baseline_policy: str = ""
+    citation_improvement_pct: float = 0.0
+    answer_quality_improvement_pct: float = 0.0
+    combined_improvement_pct: float = 0.0
+    sota_baselines_compared: int = 0
+    sota_win_count: int = 0
+    sota_win_rate: float = 0.0
 
 
 class UsageDrivenContextPruner:
@@ -401,6 +436,29 @@ def evaluate_usage_pruning(
     degradation_tolerance: float = 0.05,
     policies: Sequence[str] = DEFAULT_POLICIES,
 ) -> Tuple[List[CuadEvaluationRow], List[CuadDetailRow]]:
+    pruner, train_items, eval_items = prepare_usage_evaluation(
+        contracts,
+        train_fraction=train_fraction,
+    )
+    return evaluate_usage_pruning_with_prepared_state(
+        contracts=contracts,
+        eval_items=eval_items,
+        pruner=pruner,
+        train_count=len(train_items),
+        prune_ratios=prune_ratios,
+        degradation_tolerance=degradation_tolerance,
+        policies=policies,
+    )
+
+
+def prepare_usage_evaluation(
+    contracts: Sequence[CuadContract],
+    train_fraction: float,
+) -> Tuple[
+    UsageDrivenContextPruner,
+    List[Tuple[CuadContract, CuadQuestion]],
+    List[Tuple[CuadContract, CuadQuestion]],
+]:
     pruner = UsageDrivenContextPruner()
     train_items: List[Tuple[CuadContract, CuadQuestion]] = []
     eval_items: List[Tuple[CuadContract, CuadQuestion]] = []
@@ -417,14 +475,25 @@ def evaluate_usage_pruning(
 
     for index, (contract, question) in enumerate(train_items):
         pruner.observe_correct_answer(contract, question, question_index=index)
+    return pruner, train_items, eval_items
 
+
+def evaluate_usage_pruning_with_prepared_state(
+    contracts: Sequence[CuadContract],
+    eval_items: Sequence[Tuple[CuadContract, CuadQuestion]],
+    pruner: UsageDrivenContextPruner,
+    train_count: int,
+    prune_ratios: Sequence[float],
+    degradation_tolerance: float,
+    policies: Sequence[str],
+) -> Tuple[List[CuadEvaluationRow], List[CuadDetailRow]]:
     baseline_details = evaluate_at_ratio(
         contracts,
         eval_items,
         pruner,
         policy="usage_driven",
         prune_ratio=0.0,
-        current_index=len(train_items),
+        current_index=train_count,
         ranking_cache={},
     )
     baseline_citation = safe_mean([1.0 if row.citation_preserved else 0.0 for row in baseline_details])
@@ -441,7 +510,7 @@ def evaluate_usage_pruning(
                 pruner,
                 policy=policy,
                 prune_ratio=prune_ratio,
-                current_index=len(train_items),
+                current_index=train_count,
                 ranking_cache=ranking_cache,
             )
             details.extend(ratio_details)
@@ -521,6 +590,243 @@ def evaluate_at_ratio(
             )
         )
     return rows
+
+
+CUAD_GEMMA_SYSTEM_INSTRUCTION = """You are a contract question-answering evaluator.
+Use only the retained CUAD contract sections supplied in the prompt.
+Return a single valid JSON object with these fields:
+{
+  "answer": "short answer span or empty string",
+  "citations": ["section_id"],
+  "explanation": "brief grounded rationale"
+}
+Do not include any text outside the JSON."""
+
+
+def evaluate_cuad_with_gemma(
+    contracts: Sequence[CuadContract],
+    prune_ratios: Sequence[float],
+    policies: Sequence[str],
+    client: GemmaClient,
+    train_fraction: float = 0.6,
+    sample_size: int = 5,
+    max_context_chars: int = 6000,
+) -> Tuple[List[CuadGemmaSummaryRow], List[CuadGemmaDetailRow]]:
+    """Ask Gemma 4 to answer CUAD questions from pruned retained sections."""
+
+    pruner, train_items, eval_items = prepare_usage_evaluation(
+        contracts,
+        train_fraction=train_fraction,
+    )
+    if sample_size:
+        eval_items = eval_items[:sample_size]
+
+    details: List[CuadGemmaDetailRow] = []
+    ranking_cache: Dict[Tuple[str, str, str, int], List[CuadSection]] = {}
+    for policy in policies:
+        for prune_ratio in prune_ratios:
+            for contract, question in eval_items:
+                retained = retain_sections_for_policy(
+                    policy=policy,
+                    contract=contract,
+                    question=question,
+                    pruner=pruner,
+                    prune_ratio=prune_ratio,
+                    current_index=len(train_items),
+                    ranking_cache=ranking_cache,
+                )
+                prompt = build_cuad_gemma_prompt(
+                    contract=contract,
+                    question=question,
+                    retained_sections=retained,
+                    max_context_chars=max_context_chars,
+                )
+                payload = client.generate_json(
+                    prompt,
+                    system_instruction=CUAD_GEMMA_SYSTEM_INSTRUCTION,
+                )
+                answer = stringify_json_value(payload.get("answer", ""))
+                citations = payload.get("citations") or []
+                if isinstance(citations, str):
+                    citation_values = [citations]
+                elif isinstance(citations, list):
+                    citation_values = [str(item) for item in citations]
+                else:
+                    citation_values = []
+                gold_sections = gold_answer_sections(contract, question)
+                gold_ids = {section.id for section in gold_sections}
+                retained_ids = {section.id for section in retained}
+                answer_quality = max(
+                    [token_recall(gold_answer, answer) for gold_answer in question.answer_texts]
+                    or [0.0]
+                )
+                details.append(
+                    CuadGemmaDetailRow(
+                        policy=policy,
+                        prune_ratio=prune_ratio,
+                        contract_id=contract.id,
+                        question_id=question.id,
+                        retained_section_count=len(retained),
+                        gold_answers=" || ".join(question.answer_texts),
+                        generated_answer=answer,
+                        generated_citations=";".join(citation_values),
+                        citation_preserved=bool(gold_ids & retained_ids),
+                        answer_quality=answer_quality,
+                    )
+                )
+
+    summaries = summarize_gemma_details(details)
+    annotate_gemma_improvements(summaries)
+    return summaries, details
+
+
+def build_cuad_gemma_prompt(
+    contract: CuadContract,
+    question: CuadQuestion,
+    retained_sections: Sequence[CuadSection],
+    max_context_chars: int,
+) -> str:
+    context_blocks: List[str] = []
+    used_chars = 0
+    for section in retained_sections:
+        block = f"[{section.id}]\n{section.text}"
+        if used_chars + len(block) > max_context_chars:
+            break
+        context_blocks.append(block)
+        used_chars += len(block)
+    context_text = "\n\n".join(context_blocks) if context_blocks else "(no retained context)"
+    return f"""Answer this CUAD contract review question using only retained context sections.
+
+Contract title:
+{contract.title}
+
+Question:
+{question.question}
+
+Retained context sections:
+{context_text}
+
+Return JSON only:
+{{
+  "answer": "short answer span or empty string",
+  "citations": ["section_id"],
+  "explanation": "brief rationale grounded in retained context"
+}}
+"""
+
+
+def summarize_gemma_details(
+    details: Sequence[CuadGemmaDetailRow],
+) -> List[CuadGemmaSummaryRow]:
+    grouped: Dict[Tuple[str, float], List[CuadGemmaDetailRow]] = {}
+    for detail in details:
+        grouped.setdefault((detail.policy, detail.prune_ratio), []).append(detail)
+
+    summaries: List[CuadGemmaSummaryRow] = []
+    for (policy, prune_ratio), rows in sorted(grouped.items()):
+        summaries.append(
+            CuadGemmaSummaryRow(
+                policy=policy,
+                policy_family=policy_family(policy),
+                prune_ratio=prune_ratio,
+                questions=len(rows),
+                avg_retained_sections=safe_mean(
+                    [row.retained_section_count for row in rows]
+                ),
+                citation_accuracy=safe_mean(
+                    [1.0 if row.citation_preserved else 0.0 for row in rows]
+                ),
+                gemma_answer_quality=safe_mean([row.answer_quality for row in rows]),
+            )
+        )
+    return summaries
+
+
+def annotate_gemma_improvements(rows: Sequence[CuadGemmaSummaryRow]) -> None:
+    by_ratio: Dict[float, List[CuadGemmaSummaryRow]] = {}
+    for row in rows:
+        by_ratio.setdefault(row.prune_ratio, []).append(row)
+    for ratio_rows in by_ratio.values():
+        baselines = [row for row in ratio_rows if row.policy in SOTA_BASELINE_POLICIES]
+        if not baselines:
+            continue
+        best_baseline = max(
+            baselines,
+            key=lambda row: row.citation_accuracy + row.gemma_answer_quality,
+        )
+        for row in ratio_rows:
+            if row.policy not in NOVEL_POLICIES:
+                continue
+            row.baseline_policy = best_baseline.policy
+            row.citation_improvement_pct = percent_improvement(
+                row.citation_accuracy,
+                best_baseline.citation_accuracy,
+            )
+            row.answer_quality_improvement_pct = percent_improvement(
+                row.gemma_answer_quality,
+                best_baseline.gemma_answer_quality,
+            )
+            row.combined_improvement_pct = percent_improvement(
+                row.citation_accuracy + row.gemma_answer_quality,
+                best_baseline.citation_accuracy + best_baseline.gemma_answer_quality,
+            )
+            row.sota_baselines_compared = len(baselines)
+            row.sota_win_count = sum(
+                1
+                for baseline in baselines
+                if (row.citation_accuracy + row.gemma_answer_quality)
+                > (baseline.citation_accuracy + baseline.gemma_answer_quality)
+            )
+            row.sota_win_rate = safe_ratio(row.sota_win_count, len(baselines))
+
+
+def write_gemma_markdown_report(
+    path: str | Path,
+    rows: Sequence[CuadGemmaSummaryRow],
+) -> None:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    best_improvement = max(
+        [row for row in rows if row.policy in NOVEL_POLICIES],
+        key=lambda row: row.combined_improvement_pct,
+        default=None,
+    )
+    lines = [
+        "# CUAD Gemma 4 Pruned-Context Evaluation",
+        "",
+        "This report calls Gemma 4 to answer CUAD questions from each policy's",
+        "retained context, then compares answer-span token recall and retained",
+        "gold-citation availability.",
+        "",
+    ]
+    if best_improvement and best_improvement.baseline_policy:
+        lines.extend(
+            [
+                "## Best usage-driven improvement",
+                "",
+                (
+                    f"`{best_improvement.policy}` achieved "
+                    f"{best_improvement.combined_improvement_pct:.1f}% combined lift "
+                    f"over `{best_improvement.baseline_policy}` at prune_ratio="
+                    f"{best_improvement.prune_ratio:.2f}."
+                ),
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "| Policy | Prune ratio | Questions | Citation accuracy | Gemma answer quality | Improvement vs best SOTA | SOTA wins |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in rows:
+        lines.append(
+            f"| {row.policy} | {row.prune_ratio:.2f} | {row.questions} | "
+            f"{row.citation_accuracy:.3f} | {row.gemma_answer_quality:.3f} | "
+            f"{row.combined_improvement_pct:.1f}% | "
+            f"{row.sota_win_count}/{row.sota_baselines_compared} |"
+        )
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def retain_sections_for_policy(
@@ -1282,6 +1588,16 @@ def parse_policies(value: str) -> List[str]:
     return policies or list(DEFAULT_POLICIES)
 
 
+def stringify_json_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=True)
+    return str(value)
+
+
 def answer_quality_score(answer: str, retained_sections: Sequence[CuadSection]) -> float:
     """Return answer-span coverage proxy over retained sections."""
 
@@ -1380,6 +1696,38 @@ def build_parser() -> argparse.ArgumentParser:
         default="outputs/cuad_plots",
         help="Directory for journal-style SVG plots.",
     )
+    parser.add_argument(
+        "--gemma-eval",
+        action="store_true",
+        help="Call Gemma 4 to answer held-out CUAD questions from pruned context.",
+    )
+    parser.add_argument(
+        "--gemma-config",
+        action="append",
+        default=[],
+        help="Path to app TOML config for Gemma 4 evaluation. Can be supplied multiple times.",
+    )
+    parser.add_argument(
+        "--gemma-secrets",
+        action="append",
+        default=[],
+        help="Path to secrets TOML config for Gemma 4 evaluation. Can be supplied multiple times.",
+    )
+    parser.add_argument(
+        "--gemma-sample-size",
+        type=int,
+        default=5,
+        help="Held-out CUAD questions per policy/prune setting for Gemma 4 calls.",
+    )
+    parser.add_argument(
+        "--gemma-max-context-chars",
+        type=int,
+        default=6000,
+        help="Maximum retained context characters sent to Gemma 4 per question.",
+    )
+    parser.add_argument("--gemma-summary-output", default="outputs/cuad_gemma_summary.csv")
+    parser.add_argument("--gemma-details-output", default="outputs/cuad_gemma_details.csv")
+    parser.add_argument("--gemma-report-output", default="outputs/cuad_gemma_report.md")
     return parser
 
 
@@ -1406,6 +1754,36 @@ def main(argv: List[str] | None = None) -> int:
     plot_paths = write_journal_plots(args.plots_output_dir, rows)
     write_markdown_report(args.report_output, rows, plot_paths=plot_paths)
 
+    gemma_outputs: Dict[str, str] = {}
+    policies = parse_policies(args.policies)
+    if args.gemma_eval:
+        config = load_config(
+            config_paths=[Path(path) for path in args.gemma_config]
+            if args.gemma_config
+            else None,
+            secret_paths=[Path(path) for path in args.gemma_secrets]
+            if args.gemma_secrets
+            else None,
+        )
+        client = GemmaClient(config)
+        gemma_summary, gemma_details = evaluate_cuad_with_gemma(
+            contracts=contracts,
+            prune_ratios=parse_prune_ratios(args.prune_ratios),
+            policies=policies,
+            client=client,
+            train_fraction=args.train_fraction,
+            sample_size=args.gemma_sample_size,
+            max_context_chars=args.gemma_max_context_chars,
+        )
+        write_csv(args.gemma_summary_output, gemma_summary)
+        write_csv(args.gemma_details_output, gemma_details)
+        write_gemma_markdown_report(args.gemma_report_output, gemma_summary)
+        gemma_outputs = {
+            "gemma_summary_output": args.gemma_summary_output,
+            "gemma_details_output": args.gemma_details_output,
+            "gemma_report_output": args.gemma_report_output,
+        }
+
     best_safe = max(
         [row for row in rows if not row.significant_degradation],
         key=lambda row: row.context_removed_ratio,
@@ -1421,6 +1799,7 @@ def main(argv: List[str] | None = None) -> int:
                 "plots_output_dir": args.plots_output_dir,
                 "plots": [str(path) for path in plot_paths],
                 "policies": sorted({row.policy for row in rows}),
+                **gemma_outputs,
                 "max_safe_context_removed_ratio": (
                     best_safe.context_removed_ratio if best_safe else 0.0
                 ),
