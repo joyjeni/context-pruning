@@ -5,10 +5,12 @@ from pathlib import Path
 from acpa_gemma.cuad import (
     SOTA_BASELINE_POLICIES,
     UsageDrivenContextPruner,
+    evaluate_cuad_with_gemma,
     evaluate_usage_pruning,
     gold_answer_sections,
     load_cuad_dataset,
     main,
+    write_gemma_markdown_report,
 )
 
 
@@ -164,3 +166,47 @@ def test_cuad_cli_writes_outputs(tmp_path: Path):
     assert (tmp_path / "plots" / "improvement_vs_context_removed.svg").exists()
     assert (tmp_path / "plots" / "max_safe_context_removed_by_policy.svg").exists()
     assert "Journal-style figures" in (tmp_path / "report.md").read_text(encoding="utf-8")
+
+
+class FakeGemmaClient:
+    def generate_json(self, prompt: str, system_instruction: str | None = None):
+        if "governing law" in prompt.lower():
+            answer = "Delaware law"
+        elif "term" in prompt.lower():
+            answer = "three years"
+        else:
+            answer = "MASTER SERVICES AGREEMENT"
+        return {
+            "answer": answer,
+            "citations": ["demo_contract_0:section:0"],
+            "explanation": "fake test response",
+        }
+
+
+def test_gemma_cuad_evaluation_compares_policies(tmp_path: Path):
+    json_path = tmp_path / "CUADv1.json"
+    write_cuad_json(json_path)
+    contracts = load_cuad_dataset(json_path, max_section_chars=80)
+
+    summary, details = evaluate_cuad_with_gemma(
+        contracts=contracts,
+        prune_ratios=[0.0, 0.5],
+        policies=["usage_driven", "bm25_query_relevance", "late_interaction_maxsim"],
+        client=FakeGemmaClient(),  # type: ignore[arg-type]
+        train_fraction=0.34,
+        sample_size=2,
+        max_context_chars=1000,
+    )
+
+    assert summary
+    assert details
+    usage_rows = [row for row in summary if row.policy == "usage_driven"]
+    assert usage_rows
+    assert all(row.sota_baselines_compared == 2 for row in usage_rows)
+    assert all(0 <= row.gemma_answer_quality <= 1 for row in summary)
+
+    report_path = tmp_path / "gemma_report.md"
+    write_gemma_markdown_report(report_path, summary)
+    report = report_path.read_text(encoding="utf-8")
+    assert "CUAD Gemma 4 Pruned-Context Evaluation" in report
+    assert "Gemma answer quality" in report

@@ -193,6 +193,38 @@ fusion, centrality, late-interaction, and diversity-aware pruning, then reports
 how much context can be removed before citation accuracy or answer-span coverage
 significantly degrade.
 
+### Optional Gemma 4 CUAD answer evaluation
+
+The default CUAD benchmark is offline and reproducible. To satisfy a Gemma 4
+model-in-the-loop evaluation, add `--gemma-eval`. This asks Gemma 4 to answer
+held-out CUAD questions from each policy's retained context and writes separate
+Gemma comparison artifacts.
+
+```bash
+python3 -m acpa_gemma.cuad \
+  --input data.zip \
+  --json-member CUADv1.json \
+  --max-contracts 10 \
+  --prune-ratios 0,0.3,0.5 \
+  --policies usage_driven,hybrid_usage_bm25,bm25_query_relevance,mmr_diverse_relevance,rrf_bm25_textrank,dpp_diverse_relevance,late_interaction_maxsim \
+  --gemma-eval \
+  --gemma-config configs/app.toml \
+  --gemma-secrets configs/secrets.toml \
+  --gemma-sample-size 5 \
+  --gemma-summary-output outputs/cuad_gemma_summary.csv \
+  --gemma-details-output outputs/cuad_gemma_details.csv \
+  --gemma-report-output outputs/cuad_gemma_report.md
+```
+
+Gemma outputs measure answer-span token recall against CUAD gold answers and
+report percentage improvement over the best of the five SOTA-style baselines at
+the same prune ratio. Keep `--gemma-sample-size` small while debugging because
+the number of API calls is roughly:
+
+```text
+policies * prune_ratios * gemma_sample_size
+```
+
 ## Kaggle usage
 
 1. Create a Kaggle notebook for the Gemma 4 Good Hackathon.
