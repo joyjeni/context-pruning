@@ -21,6 +21,13 @@ import zipfile
 CUAD_DATA_URL = "https://github.com/TheAtticusProject/cuad/raw/main/data.zip"
 DEFAULT_CUAD_MEMBER = "CUADv1.json"
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./%-]+")
+DEFAULT_POLICIES = [
+    "usage_driven",
+    "hybrid_usage_bm25",
+    "bm25_query_relevance",
+    "mmr_diverse_relevance",
+]
+NOVEL_POLICIES = {"usage_driven", "hybrid_usage_bm25"}
 
 
 @dataclass
@@ -70,6 +77,8 @@ class SectionUsageStats:
 
 @dataclass
 class CuadEvaluationRow:
+    policy: str
+    policy_family: str
     prune_ratio: float
     contracts: int
     questions: int
@@ -82,13 +91,20 @@ class CuadEvaluationRow:
     citation_degradation: float
     answer_quality_degradation: float
     significant_degradation: bool
+    baseline_policy: str = ""
+    citation_improvement_pct: float = 0.0
+    answer_quality_improvement_pct: float = 0.0
+    combined_improvement_pct: float = 0.0
 
 
 @dataclass
 class CuadDetailRow:
+    policy: str
     prune_ratio: float
     contract_id: str
     question_id: str
+    original_section_count: int
+    retained_section_count: int
     gold_section_ids: str
     retained_gold_section_ids: str
     citation_preserved: bool
@@ -369,6 +385,7 @@ def evaluate_usage_pruning(
     prune_ratios: Sequence[float],
     train_fraction: float = 0.6,
     degradation_tolerance: float = 0.05,
+    policies: Sequence[str] = DEFAULT_POLICIES,
 ) -> Tuple[List[CuadEvaluationRow], List[CuadDetailRow]]:
     pruner = UsageDrivenContextPruner()
     train_items: List[Tuple[CuadContract, CuadQuestion]] = []
@@ -391,53 +408,59 @@ def evaluate_usage_pruning(
         contracts,
         eval_items,
         pruner,
+        policy="usage_driven",
         prune_ratio=0.0,
         current_index=len(train_items),
+        ranking_cache={},
     )
     baseline_citation = safe_mean([1.0 if row.citation_preserved else 0.0 for row in baseline_details])
     baseline_quality = safe_mean([row.answer_quality for row in baseline_details])
 
     rows: List[CuadEvaluationRow] = []
     details: List[CuadDetailRow] = []
-    for prune_ratio in prune_ratios:
-        ratio_details = evaluate_at_ratio(
-            contracts,
-            eval_items,
-            pruner,
-            prune_ratio=prune_ratio,
-            current_index=len(train_items),
-        )
-        details.extend(ratio_details)
-        citation_accuracy = safe_mean([1.0 if row.citation_preserved else 0.0 for row in ratio_details])
-        answer_quality = safe_mean([row.answer_quality for row in ratio_details])
-        original_sections = sum(len(contract.sections) for contract in contracts)
-        retained_sections = retained_section_count(
-            contracts,
-            pruner,
-            prune_ratio=prune_ratio,
-            current_index=len(train_items),
-        )
-        citation_drop = max(0.0, baseline_citation - citation_accuracy)
-        quality_drop = max(0.0, baseline_quality - answer_quality)
-        rows.append(
-            CuadEvaluationRow(
+    ranking_cache: Dict[Tuple[str, str, str, int], List[CuadSection]] = {}
+    for policy in policies:
+        for prune_ratio in prune_ratios:
+            ratio_details = evaluate_at_ratio(
+                contracts,
+                eval_items,
+                pruner,
+                policy=policy,
                 prune_ratio=prune_ratio,
-                contracts=len(contracts),
-                questions=len(eval_items),
-                answerable_questions=len(eval_items),
-                original_sections=original_sections,
-                retained_sections=retained_sections,
-                context_removed_ratio=1 - safe_ratio(retained_sections, original_sections),
-                citation_accuracy=citation_accuracy,
-                answer_quality=answer_quality,
-                citation_degradation=citation_drop,
-                answer_quality_degradation=quality_drop,
-                significant_degradation=(
-                    citation_drop > degradation_tolerance
-                    or quality_drop > degradation_tolerance
-                ),
+                current_index=len(train_items),
+                ranking_cache=ranking_cache,
             )
-        )
+            details.extend(ratio_details)
+            citation_accuracy = safe_mean(
+                [1.0 if row.citation_preserved else 0.0 for row in ratio_details]
+            )
+            answer_quality = safe_mean([row.answer_quality for row in ratio_details])
+            original_sections = sum(len(contract.sections) for contract, _ in eval_items)
+            retained_sections = sum(row.retained_section_count for row in ratio_details)
+            citation_drop = max(0.0, baseline_citation - citation_accuracy)
+            quality_drop = max(0.0, baseline_quality - answer_quality)
+            rows.append(
+                CuadEvaluationRow(
+                    policy=policy,
+                    policy_family=policy_family(policy),
+                    prune_ratio=prune_ratio,
+                    contracts=len(contracts),
+                    questions=len(eval_items),
+                    answerable_questions=len(eval_items),
+                    original_sections=original_sections,
+                    retained_sections=retained_sections,
+                    context_removed_ratio=1 - safe_ratio(retained_sections, original_sections),
+                    citation_accuracy=citation_accuracy,
+                    answer_quality=answer_quality,
+                    citation_degradation=citation_drop,
+                    answer_quality_degradation=quality_drop,
+                    significant_degradation=(
+                        citation_drop > degradation_tolerance
+                        or quality_drop > degradation_tolerance
+                    ),
+                )
+            )
+    annotate_policy_improvements(rows)
     return rows, details
 
 
@@ -445,22 +468,24 @@ def evaluate_at_ratio(
     contracts: Sequence[CuadContract],
     eval_items: Sequence[Tuple[CuadContract, CuadQuestion]],
     pruner: UsageDrivenContextPruner,
+    policy: str,
     prune_ratio: float,
     current_index: int,
+    ranking_cache: Dict[Tuple[str, str, str, int], List[CuadSection]],
 ) -> List[CuadDetailRow]:
-    retained_by_contract = {
-        contract.id: pruner.retain_sections(
-            contract.sections,
-            prune_ratio=prune_ratio,
-            current_index=current_index,
-        )
-        for contract in contracts
-    }
     rows: List[CuadDetailRow] = []
     for contract, question in eval_items:
         gold_sections = gold_answer_sections(contract, question)
         gold_ids = {section.id for section in gold_sections}
-        retained = retained_by_contract.get(contract.id, [])
+        retained = retain_sections_for_policy(
+            policy=policy,
+            contract=contract,
+            question=question,
+            pruner=pruner,
+            prune_ratio=prune_ratio,
+            current_index=current_index,
+            ranking_cache=ranking_cache,
+        )
         retained_ids = {section.id for section in retained}
         retained_gold_ids = gold_ids & retained_ids
         answer_quality = max(
@@ -469,9 +494,12 @@ def evaluate_at_ratio(
         )
         rows.append(
             CuadDetailRow(
+                policy=policy,
                 prune_ratio=prune_ratio,
                 contract_id=contract.id,
                 question_id=question.id,
+                original_section_count=len(contract.sections),
+                retained_section_count=len(retained),
                 gold_section_ids=";".join(sorted(gold_ids)),
                 retained_gold_section_ids=";".join(sorted(retained_gold_ids)),
                 citation_preserved=bool(retained_gold_ids),
@@ -481,22 +509,219 @@ def evaluate_at_ratio(
     return rows
 
 
-def retained_section_count(
-    contracts: Sequence[CuadContract],
+def retain_sections_for_policy(
+    policy: str,
+    contract: CuadContract,
+    question: CuadQuestion,
     pruner: UsageDrivenContextPruner,
     prune_ratio: float,
     current_index: int,
-) -> int:
-    return sum(
-        len(
-            pruner.retain_sections(
+    ranking_cache: Dict[Tuple[str, str, str, int], List[CuadSection]],
+) -> List[CuadSection]:
+    """Retain sections with dynamic, query-aware policies."""
+
+    if not 0 <= prune_ratio < 1:
+        raise ValueError("prune_ratio must be in [0, 1)")
+    if not contract.sections:
+        return []
+
+    n_retain = max(1, round(len(contract.sections) * (1 - prune_ratio)))
+    question_key = "" if policy == "usage_driven" else question.id
+    cache_key = (policy, contract.id, question_key, current_index)
+    ranked = ranking_cache.get(cache_key)
+    if ranked is None:
+        if policy == "usage_driven":
+            ranked = pruner.rank_sections(contract.sections, current_index=current_index)
+        elif policy == "bm25_query_relevance":
+            ranked = rank_sections_bm25(question.question, contract.sections)
+        elif policy == "mmr_diverse_relevance":
+            ranked = rank_sections_mmr(question.question, contract.sections)
+        elif policy == "hybrid_usage_bm25":
+            ranked = rank_sections_hybrid_usage_bm25(
+                question.question,
                 contract.sections,
-                prune_ratio=prune_ratio,
+                pruner=pruner,
                 current_index=current_index,
             )
-        )
-        for contract in contracts
+        else:
+            raise ValueError(f"Unknown CUAD pruning policy: {policy}")
+        ranking_cache[cache_key] = ranked
+    return sorted(ranked[:n_retain], key=lambda section: section.ordinal)
+
+
+def rank_sections_bm25(query: str, sections: Sequence[CuadSection]) -> List[CuadSection]:
+    """Rank sections using Okapi BM25 lexical relevance."""
+
+    scores = bm25_scores(query, sections)
+    ranked = [clone_section(section, scores.get(section.id, 0.0)) for section in sections]
+    return sorted(ranked, key=lambda section: (section.utility_score, -section.ordinal), reverse=True)
+
+
+def rank_sections_mmr(
+    query: str,
+    sections: Sequence[CuadSection],
+    lambda_relevance: float = 0.72,
+    candidate_limit: int = 80,
+) -> List[CuadSection]:
+    """Rank sections with MMR to balance query relevance and diversity."""
+
+    scores = bm25_scores(query, sections)
+    relevance_ranked = sorted(
+        [clone_section(section, scores.get(section.id, 0.0)) for section in sections],
+        key=lambda section: (section.utility_score, -section.ordinal),
+        reverse=True,
     )
+    candidate_count = min(candidate_limit, len(relevance_ranked))
+    selected: List[CuadSection] = []
+    remaining = relevance_ranked[:candidate_count]
+    tail = relevance_ranked[candidate_count:]
+    remaining_tokens = [token_set(section.text) for section in remaining]
+    selected_tokens: List[Set[str]] = []
+    while remaining:
+        best_index = 0
+        best_score = float("-inf")
+        for index, section in enumerate(remaining):
+            section_tokens = remaining_tokens[index]
+            redundancy = max(
+                [jaccard_similarity(section_tokens, tokens) for tokens in selected_tokens]
+                or [0.0]
+            )
+            mmr_score = lambda_relevance * section.utility_score - (
+                1 - lambda_relevance
+            ) * redundancy
+            if mmr_score > best_score:
+                best_score = mmr_score
+                best_index = index
+        chosen = remaining.pop(best_index)
+        chosen_tokens = remaining_tokens.pop(best_index)
+        chosen.utility_score = best_score
+        selected.append(chosen)
+        selected_tokens.append(chosen_tokens)
+    return selected + tail
+
+
+def rank_sections_hybrid_usage_bm25(
+    query: str,
+    sections: Sequence[CuadSection],
+    pruner: UsageDrivenContextPruner,
+    current_index: int,
+) -> List[CuadSection]:
+    """Rank with cumulative usage utility plus query-time BM25 relevance."""
+
+    usage_scores = {
+        section.id: pruner.score_section(section, current_index=current_index)
+        for section in sections
+    }
+    bm25 = bm25_scores(query, sections)
+    normalized_usage = normalize_scores(usage_scores)
+    normalized_bm25 = normalize_scores(bm25)
+    ranked = []
+    for section in sections:
+        score = (
+            0.62 * normalized_usage.get(section.id, 0.0)
+            + 0.38 * normalized_bm25.get(section.id, 0.0)
+        )
+        ranked.append(clone_section(section, score))
+    return sorted(ranked, key=lambda section: (section.utility_score, -section.ordinal), reverse=True)
+
+
+def bm25_scores(query: str, sections: Sequence[CuadSection]) -> Dict[str, float]:
+    query_terms = [term for term in token_set(query) if term]
+    if not query_terms or not sections:
+        return {section.id: 0.0 for section in sections}
+
+    section_terms = {section.id: token_list(section.text) for section in sections}
+    section_term_sets = {
+        section_id: set(terms) for section_id, terms in section_terms.items()
+    }
+    doc_count = len(sections)
+    avg_len = safe_mean([len(terms) for terms in section_terms.values()]) or 1.0
+    document_frequency: Dict[str, int] = {}
+    for term in query_terms:
+        document_frequency[term] = sum(
+            1 for terms in section_term_sets.values() if term in terms
+        )
+
+    k1 = 1.2
+    b = 0.75
+    scores: Dict[str, float] = {}
+    for section in sections:
+        terms = section_terms[section.id]
+        length = len(terms) or 1
+        score = 0.0
+        for term in query_terms:
+            tf = terms.count(term)
+            if not tf:
+                continue
+            df = document_frequency.get(term, 0)
+            idf = max(0.0, ((doc_count - df + 0.5) / (df + 0.5)))
+            idf = 1.0 + idf
+            denominator = tf + k1 * (1 - b + b * length / avg_len)
+            score += idf * (tf * (k1 + 1)) / denominator
+        scores[section.id] = score
+    return scores
+
+
+def annotate_policy_improvements(rows: Sequence[CuadEvaluationRow]) -> None:
+    """Annotate novel policy rows versus best non-usage policy at same ratio."""
+
+    by_ratio: Dict[float, List[CuadEvaluationRow]] = {}
+    for row in rows:
+        by_ratio.setdefault(row.prune_ratio, []).append(row)
+
+    for ratio_rows in by_ratio.values():
+        baselines = [row for row in ratio_rows if row.policy not in NOVEL_POLICIES]
+        if not baselines:
+            continue
+        best_baseline = max(
+            baselines,
+            key=lambda row: (row.citation_accuracy + row.answer_quality, row.context_removed_ratio),
+        )
+        for row in ratio_rows:
+            if row.policy not in NOVEL_POLICIES:
+                continue
+            row.baseline_policy = best_baseline.policy
+            row.citation_improvement_pct = percent_improvement(
+                row.citation_accuracy,
+                best_baseline.citation_accuracy,
+            )
+            row.answer_quality_improvement_pct = percent_improvement(
+                row.answer_quality,
+                best_baseline.answer_quality,
+            )
+            row.combined_improvement_pct = percent_improvement(
+                row.citation_accuracy + row.answer_quality,
+                best_baseline.citation_accuracy + best_baseline.answer_quality,
+            )
+
+
+def policy_family(policy: str) -> str:
+    if policy in NOVEL_POLICIES:
+        return "usage_driven"
+    return "dynamic_baseline"
+
+
+def clone_section(section: CuadSection, utility_score: float) -> CuadSection:
+    copied = CuadSection(**asdict(section))
+    copied.utility_score = utility_score
+    return copied
+
+
+def normalize_scores(scores: Dict[str, float]) -> Dict[str, float]:
+    if not scores:
+        return {}
+    values = list(scores.values())
+    low = min(values)
+    high = max(values)
+    if high == low:
+        return {key: 0.0 for key in scores}
+    return {key: (value - low) / (high - low) for key, value in scores.items()}
+
+
+def percent_improvement(value: float, baseline: float) -> float:
+    if baseline == 0:
+        return 100.0 if value > 0 else 0.0
+    return ((value - baseline) / baseline) * 100
 
 
 def write_csv(path: str | Path, rows: Sequence[Any]) -> None:
@@ -515,14 +740,25 @@ def write_csv(path: str | Path, rows: Sequence[Any]) -> None:
 def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    safe_rows = [row for row in rows if not row.significant_degradation]
-    best_safe = max(safe_rows, key=lambda row: row.context_removed_ratio, default=None)
+    usage_rows = [row for row in rows if row.policy in NOVEL_POLICIES]
+    safe_rows = [row for row in usage_rows if not row.significant_degradation]
+    best_safe = max(
+        safe_rows,
+        key=lambda row: (row.context_removed_ratio, row.combined_improvement_pct),
+        default=None,
+    )
+    best_improvement = max(
+        usage_rows,
+        key=lambda row: row.combined_improvement_pct,
+        default=None,
+    )
     lines = [
         "# CUAD Usage-Driven Context Pruning Report",
         "",
-        "This offline evaluation learns which contract sections are repeatedly used",
-        "for correct CUAD answers, prunes low-utility sections, and measures when",
-        "citation accuracy or answer-span coverage degrades.",
+        "This offline evaluation compares usage-driven context pruning against",
+        "dynamic query-aware baselines. It learns which contract sections are",
+        "repeatedly used for correct CUAD answers, prunes low-utility sections,",
+        "and measures when citation accuracy or answer-span coverage degrades.",
         "",
     ]
     if best_safe:
@@ -532,21 +768,35 @@ def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -
                 "",
                 (
                     f"Maximum safe context removal: **{best_safe.context_removed_ratio:.1%}** "
-                    f"at prune_ratio={best_safe.prune_ratio:.2f}."
+                    f"with `{best_safe.policy}` at prune_ratio={best_safe.prune_ratio:.2f}."
+                ),
+                "",
+            ]
+        )
+    if best_improvement and best_improvement.baseline_policy:
+        lines.extend(
+            [
+                "## Novel-policy improvement over dynamic baselines",
+                "",
+                (
+                    f"Best combined improvement: **{best_improvement.combined_improvement_pct:.1f}%** "
+                    f"for `{best_improvement.policy}` over `{best_improvement.baseline_policy}` "
+                    f"at prune_ratio={best_improvement.prune_ratio:.2f}."
                 ),
                 "",
             ]
         )
     lines.extend(
         [
-            "| Prune ratio | Removed | Citation accuracy | Answer quality | Significant degradation |",
-            "|---:|---:|---:|---:|:---:|",
+            "| Policy | Prune ratio | Removed | Citation accuracy | Answer quality | Improvement vs baseline | Significant degradation |",
+            "|---|---:|---:|---:|---:|---:|:---:|",
         ]
     )
     for row in rows:
         lines.append(
-            f"| {row.prune_ratio:.2f} | {row.context_removed_ratio:.3f} | "
+            f"| {row.policy} | {row.prune_ratio:.2f} | {row.context_removed_ratio:.3f} | "
             f"{row.citation_accuracy:.3f} | {row.answer_quality:.3f} | "
+            f"{row.combined_improvement_pct:.1f}% | "
             f"{'yes' if row.significant_degradation else 'no'} |"
         )
     lines.extend(
@@ -558,8 +808,11 @@ def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -
             "  gold answer section remains after pruning.",
             "- **Answer quality**: token-F1 proxy between gold answer spans and retained",
             "  context. It measures answer-span coverage without calling an LLM.",
+            "- **Improvement vs baseline**: percentage lift for usage-driven policies",
+            "  over the best non-usage dynamic baseline at the same prune ratio.",
             "- **Significant degradation**: citation or answer-quality drop above the",
             "  configured tolerance relative to no pruning.",
+            "- **Dynamic baselines**: BM25 query relevance and MMR diverse relevance.",
         ]
     )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -567,6 +820,15 @@ def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -
 
 def parse_prune_ratios(value: str) -> List[float]:
     return [float(item.strip()) for item in value.split(",") if item.strip()]
+
+
+def parse_policies(value: str) -> List[str]:
+    policies = [item.strip() for item in value.split(",") if item.strip()]
+    valid = set(DEFAULT_POLICIES)
+    unknown = [policy for policy in policies if policy not in valid]
+    if unknown:
+        raise ValueError(f"Unknown CUAD policies: {unknown}; valid={sorted(valid)}")
+    return policies or list(DEFAULT_POLICIES)
 
 
 def answer_quality_score(answer: str, retained_sections: Sequence[CuadSection]) -> float:
@@ -593,6 +855,16 @@ def token_recall(answer: str, context: str) -> float:
 
 def token_set(text: str) -> Set[str]:
     return {token.lower() for token in TOKEN_RE.findall(text) if token.strip()}
+
+
+def token_list(text: str) -> List[str]:
+    return [token.lower() for token in TOKEN_RE.findall(text) if token.strip()]
+
+
+def jaccard_similarity(left: Set[str], right: Set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
 
 
 def token_count(text: str) -> int:
@@ -636,6 +908,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8",
         help="Comma-separated prune ratios to evaluate.",
     )
+    parser.add_argument(
+        "--policies",
+        default=",".join(DEFAULT_POLICIES),
+        help=(
+            "Comma-separated policies: usage_driven, hybrid_usage_bm25, "
+            "bm25_query_relevance, mmr_diverse_relevance."
+        ),
+    )
     parser.add_argument("--summary-output", default="outputs/cuad_summary.csv")
     parser.add_argument("--details-output", default="outputs/cuad_details.csv")
     parser.add_argument("--report-output", default="outputs/cuad_report.md")
@@ -658,6 +938,7 @@ def main(argv: List[str] | None = None) -> int:
         prune_ratios=parse_prune_ratios(args.prune_ratios),
         train_fraction=args.train_fraction,
         degradation_tolerance=args.degradation_tolerance,
+        policies=parse_policies(args.policies),
     )
     write_csv(args.summary_output, rows)
     write_csv(args.details_output, details)
@@ -675,6 +956,7 @@ def main(argv: List[str] | None = None) -> int:
                 "summary_output": args.summary_output,
                 "details_output": args.details_output,
                 "report_output": args.report_output,
+                "policies": sorted({row.policy for row in rows}),
                 "max_safe_context_removed_ratio": (
                     best_safe.context_removed_ratio if best_safe else 0.0
                 ),
