@@ -13,6 +13,14 @@ class GemmaGenerationError(RuntimeError):
     """Raised when Gemma generation cannot be completed."""
 
 
+JSON_ONLY_SYSTEM_INSTRUCTION = (
+    "You are a JSON-only assistant. "
+    "You MUST respond with a single valid JSON object. "
+    "Do not include explanations, markdown, or any text before or after the JSON. "
+    "If you want to include text, put it inside JSON string values."
+)
+
+
 class GemmaClient:
     """Small wrapper around the Google GenAI SDK for Gemma 4 models."""
 
@@ -71,10 +79,42 @@ class GemmaClient:
         prompt: str,
         system_instruction: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Generate and parse a JSON object."""
+        """Generate a strict JSON object from Gemma output."""
+
+        if system_instruction:
+            system_instruction = f"{JSON_ONLY_SYSTEM_INSTRUCTION} {system_instruction}"
+        else:
+            system_instruction = JSON_ONLY_SYSTEM_INSTRUCTION
 
         text = self.generate(prompt=prompt, system_instruction=system_instruction)
-        return parse_json_object(text)
+        try:
+            return parse_json_object(text)
+        except ValueError:
+            print("DEBUG RAW GEMMA OUTPUT:\n", text[:1000])
+            match = re.search(r"\{.*\}", text, re.S)
+            if not match:
+                raise ValueError(
+                    "Gemma output must be a JSON object, got:\n"
+                    f"{text[:500]}"
+                ) from None
+
+            json_str = match.group(0)
+            try:
+                payload = json.loads(json_str)
+            except Exception as exc:
+                raise ValueError(
+                    "Failed to parse JSON from Gemma output. "
+                    f"Extracted:\n{json_str[:500]}\n\n"
+                    f"Original:\n{text[:500]}\n"
+                    f"Error: {exc}"
+                ) from exc
+
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    f"Gemma output must be a JSON object, got type={type(payload)}"
+                )
+
+            return payload
 
     def _get_client(self):
         if self._client is None:

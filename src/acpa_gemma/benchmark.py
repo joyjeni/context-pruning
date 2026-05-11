@@ -25,10 +25,11 @@ from acpa_gemma.data import (
     SAFETY_KEYWORDS,
     AgenticEvalRecord,
     build_context_elements,
+    dataset_diagnostics,
     extract_citations,
+    format_dataset_diagnostics,
     load_agentic_eval_dataset,
 )
-from acpa_gemma.pipeline import demo_records
 
 
 PolicyFn = Callable[
@@ -454,7 +455,13 @@ def main(argv: List[str] | None = None) -> int:
     sample_size = args.sample_size or config.data.sample_size
     records = load_agentic_eval_dataset(input_dir, sample_size=sample_size)
     if not records:
-        records = demo_records()
+        diagnostics = dataset_diagnostics(input_dir)
+        raise RuntimeError(
+            "No AgentEval records were loaded for benchmark. Attach "
+            "mukundakatta/agent-eval-scenarios in Kaggle Add data/Input, "
+            "or point --input to CSV, JSON, JSONL, NDJSON, or Parquet records.\n\n"
+            + format_dataset_diagnostics(diagnostics)
+        )
 
     rows, summaries = run_benchmark(
         records,

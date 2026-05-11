@@ -20,10 +20,49 @@ except ModuleNotFoundError:  # pragma: no cover
 SUPPORTED_SUFFIXES = {".csv", ".json", ".jsonl", ".ndjson", ".parquet"}
 JSON_ROW_KEYS = ["data", "records", "examples", "rows", "items"]
 
-PROMPT_FIELDS = ["prompt", "instruction", "query", "question", "user_prompt", "task"]
-RESPONSE_FIELDS = ["response", "answer", "completion", "output", "assistant_response"]
-TRACE_FIELDS = ["trajectory", "trace", "conversation", "messages", "tool_calls", "steps"]
-LABEL_FIELDS = ["label", "risk", "safety_label", "category", "target"]
+PROMPT_FIELDS = [
+    "prompt",
+    "instruction",
+    "query",
+    "question",
+    "user_prompt",
+    "task",
+    "scenario",
+    "scenario_prompt",
+]
+RESPONSE_FIELDS = [
+    "response",
+    "answer",
+    "completion",
+    "output",
+    "assistant_response",
+    "expected_response",
+    "model_response",
+]
+TRACE_FIELDS = [
+    "trajectory",
+    "trace",
+    "conversation",
+    "messages",
+    "tool_calls",
+    "steps",
+    "context",
+    "document",
+    "documents",
+    "docs",
+    "passages",
+    "references",
+    "citations",
+]
+LABEL_FIELDS = [
+    "label",
+    "risk",
+    "safety_label",
+    "category",
+    "target",
+    "scenario_type",
+    "safety_category",
+]
 
 SAFETY_KEYWORDS = {
     "abuse",
@@ -211,16 +250,29 @@ def normalize_row(
     row_index: int,
     source_path: str | Path,
 ) -> AgenticEvalRecord:
-    lower_map = {key.lower(): key for key in row}
+    lower_map = {normalize_field_name(key): key for key in row}
 
     def pick(fields: Sequence[str]) -> str:
         for field_name in fields:
-            original = lower_map.get(field_name.lower())
+            original = lower_map.get(normalize_field_name(field_name))
             if original is not None:
                 return stringify(row.get(original))
         return ""
 
-    record_id = pick(["id", "record_id", "example_id", "sample_id"])
+    def collect(fields: Sequence[str]) -> str:
+        values: List[str] = []
+        seen: Set[str] = set()
+        for field_name in fields:
+            original = lower_map.get(normalize_field_name(field_name))
+            if original is None or original in seen:
+                continue
+            seen.add(original)
+            value = stringify(row.get(original)).strip()
+            if value:
+                values.append(f"{original}: {value}")
+        return "\n\n".join(values)
+
+    record_id = pick(["id", "record_id", "example_id", "sample_id", "scenario_id"])
     if not record_id:
         record_id = f"{Path(source_path).stem}_{row_index}"
 
@@ -228,7 +280,7 @@ def normalize_row(
         record_id=record_id,
         prompt=pick(PROMPT_FIELDS),
         response=pick(RESPONSE_FIELDS),
-        trajectory=pick(TRACE_FIELDS),
+        trajectory=collect(TRACE_FIELDS),
         label=pick(LABEL_FIELDS),
         raw=row,
         source_path=str(source_path),
@@ -350,3 +402,9 @@ def stringify(value: Any) -> str:
     if isinstance(value, (dict, list, tuple)):
         return json.dumps(value, ensure_ascii=True)
     return str(value)
+
+
+def normalize_field_name(value: str) -> str:
+    """Normalize dataset column names across CSV/JSON naming styles."""
+
+    return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
