@@ -141,7 +141,7 @@ python3 -m acpa_gemma.cuad \
   --max-contracts 50 \
   --train-fraction 0.6 \
   --prune-ratios 0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8 \
-  --policies usage_driven,hybrid_usage_bm25,bm25_query_relevance,mmr_diverse_relevance \
+  --policies usage_driven,hybrid_usage_bm25,bm25_query_relevance,mmr_diverse_relevance,rrf_bm25_textrank,dpp_diverse_relevance,late_interaction_maxsim \
   --summary-output outputs/cuad_summary.csv \
   --details-output outputs/cuad_details.csv \
   --report-output outputs/cuad_report.md
@@ -151,7 +151,7 @@ Outputs:
 
 - `cuad_summary.csv`: policy, context removed, citation accuracy,
   answer-quality proxy, degradation flags, and percentage improvement over the
-  best non-usage dynamic baseline at the same prune ratio.
+  best non-usage SOTA-style baseline at the same prune ratio.
 - `cuad_details.csv`: per-question retained citation-section details.
 - `cuad_report.md`: maximum context removal before significant degradation.
 
@@ -165,12 +165,18 @@ Policies:
   accessed by correct answers receive higher retention priority.
 - `hybrid_usage_bm25`: usage-driven utility combined with query-time BM25
   relevance.
-- `bm25_query_relevance`: dynamic lexical retrieval baseline.
-- `mmr_diverse_relevance`: dynamic Maximal Marginal Relevance baseline that
+- `bm25_query_relevance`: Okapi BM25 sparse retrieval baseline.
+- `mmr_diverse_relevance`: Maximal Marginal Relevance baseline that
   balances query relevance and section diversity.
+- `rrf_bm25_textrank`: Reciprocal Rank Fusion baseline combining BM25 and
+  TextRank/PageRank-style section centrality.
+- `dpp_diverse_relevance`: Determinantal-point-process-inspired greedy
+  relevance plus novelty baseline.
+- `late_interaction_maxsim`: ColBERT-style lexical MaxSim approximation that
+  scores query-token late interactions without embedding dependencies.
 
 The report computes percentage improvement for the usage-driven policies over
-the best non-usage dynamic baseline at each prune ratio:
+the best of the five SOTA-style non-usage baselines at each prune ratio:
 
 ```text
 improvement = (usage_policy_score - best_dynamic_baseline_score)
@@ -178,9 +184,10 @@ improvement = (usage_policy_score - best_dynamic_baseline_score)
 ```
 
 This makes the benchmark closer to a journal-style ablation: it compares the
-proposed cumulative-usage signal against query-adaptive retrieval and
-diversity-aware pruning, then reports how much context can be removed before
-citation accuracy or answer-span coverage significantly degrade.
+proposed cumulative-usage signal against query-adaptive sparse retrieval,
+fusion, centrality, late-interaction, and diversity-aware pruning, then reports
+how much context can be removed before citation accuracy or answer-span coverage
+significantly degrade.
 
 ## Kaggle usage
 
