@@ -144,7 +144,8 @@ python3 -m acpa_gemma.cuad \
   --policies usage_driven,hybrid_usage_bm25,bm25_query_relevance,mmr_diverse_relevance,rrf_bm25_textrank,dpp_diverse_relevance,late_interaction_maxsim \
   --summary-output outputs/cuad_summary.csv \
   --details-output outputs/cuad_details.csv \
-  --report-output outputs/cuad_report.md
+  --report-output outputs/cuad_report.md \
+  --plots-output-dir outputs/cuad_plots
 ```
 
 Outputs:
@@ -153,7 +154,10 @@ Outputs:
   answer-quality proxy, degradation flags, and percentage improvement over the
   best non-usage SOTA-style baseline at the same prune ratio.
 - `cuad_details.csv`: per-question retained citation-section details.
-- `cuad_report.md`: maximum context removal before significant degradation.
+- `cuad_report.md`: maximum context removal before significant degradation,
+  SOTA comparison tables, and embedded plot links.
+- `cuad_plots/*.svg`: journal-style figures for citation accuracy, answer
+  quality, improvement over SOTA baselines, and max safe context removal.
 
 This is an offline measurement path and does not call Gemma. Citation accuracy
 means the gold answer section remains after pruning. Answer quality is an

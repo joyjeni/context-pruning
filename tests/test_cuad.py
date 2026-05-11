@@ -146,6 +146,8 @@ def test_cuad_cli_writes_outputs(tmp_path: Path):
             str(tmp_path / "details.csv"),
             "--report-output",
             str(tmp_path / "report.md"),
+            "--plots-output-dir",
+            str(tmp_path / "plots"),
         ]
     )
 
@@ -157,3 +159,8 @@ def test_cuad_cli_writes_outputs(tmp_path: Path):
     assert "CUAD Usage-Driven Context Pruning Report" in (
         tmp_path / "report.md"
     ).read_text(encoding="utf-8")
+    assert (tmp_path / "plots" / "citation_accuracy_vs_context_removed.svg").exists()
+    assert (tmp_path / "plots" / "answer_quality_vs_context_removed.svg").exists()
+    assert (tmp_path / "plots" / "improvement_vs_context_removed.svg").exists()
+    assert (tmp_path / "plots" / "max_safe_context_removed_by_policy.svg").exists()
+    assert "Journal-style figures" in (tmp_path / "report.md").read_text(encoding="utf-8")

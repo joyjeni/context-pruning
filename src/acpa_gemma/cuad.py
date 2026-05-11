@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import asdict, dataclass, field
+from html import escape
 import json
 from pathlib import Path
 import re
@@ -890,7 +891,11 @@ def write_csv(path: str | Path, rows: Sequence[Any]) -> None:
         writer.writerows(rows_as_dicts)
 
 
-def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -> None:
+def write_markdown_report(
+    path: str | Path,
+    rows: Sequence[CuadEvaluationRow],
+    plot_paths: Sequence[Path] | None = None,
+) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     usage_rows = [row for row in rows if row.policy in NOVEL_POLICIES]
@@ -943,6 +948,15 @@ def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -
                 "",
             ]
         )
+    if plot_paths:
+        lines.extend(["## Journal-style figures", ""])
+        for plot_path in plot_paths:
+            try:
+                display_path = plot_path.relative_to(output_path.parent)
+            except ValueError:
+                display_path = plot_path
+            title = plot_path.stem.replace("_", " ").title()
+            lines.extend([f"![{title}]({display_path})", ""])
     lines.extend(
         [
             "Compared SOTA-style baselines:",
@@ -987,6 +1001,272 @@ def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -
         ]
     )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_journal_plots(
+    output_dir: str | Path,
+    rows: Sequence[CuadEvaluationRow],
+) -> List[Path]:
+    """Write dependency-free SVG figures for publication-style comparisons."""
+
+    plot_dir = Path(output_dir)
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    plots = [
+        write_line_plot(
+            plot_dir / "citation_accuracy_vs_context_removed.svg",
+            rows,
+            metric_name="citation_accuracy",
+            title="Citation accuracy vs. context removed",
+            y_label="Citation accuracy",
+            percent_y=False,
+        ),
+        write_line_plot(
+            plot_dir / "answer_quality_vs_context_removed.svg",
+            rows,
+            metric_name="answer_quality",
+            title="Answer quality vs. context removed",
+            y_label="Answer quality",
+            percent_y=False,
+        ),
+        write_line_plot(
+            plot_dir / "improvement_vs_context_removed.svg",
+            [row for row in rows if row.policy in NOVEL_POLICIES],
+            metric_name="combined_improvement_pct",
+            title="Improvement over best SOTA baseline",
+            y_label="Improvement (%)",
+            percent_y=False,
+        ),
+        write_bar_plot(
+            plot_dir / "max_safe_context_removed_by_policy.svg",
+            rows,
+            title="Maximum safe context removal by policy",
+            y_label="Max safe context removed",
+        ),
+    ]
+    return plots
+
+
+def write_line_plot(
+    path: Path,
+    rows: Sequence[CuadEvaluationRow],
+    metric_name: str,
+    title: str,
+    y_label: str,
+    percent_y: bool,
+) -> Path:
+    grouped = group_rows_by_policy(rows)
+    series: Dict[str, List[Tuple[float, float]]] = {}
+    for policy, policy_rows in grouped.items():
+        points = sorted(
+            [
+                (row.context_removed_ratio, float(getattr(row, metric_name)))
+                for row in policy_rows
+            ],
+            key=lambda item: item[0],
+        )
+        if points:
+            series[policy] = points
+    y_values = [value for points in series.values() for _, value in points]
+    y_min, y_max = chart_bounds(y_values)
+    svg = build_line_svg(
+        title=title,
+        x_label="Context removed",
+        y_label=y_label,
+        series=series,
+        y_min=y_min,
+        y_max=y_max,
+        percent_y=percent_y,
+    )
+    path.write_text(svg, encoding="utf-8")
+    return path
+
+
+def write_bar_plot(
+    path: Path,
+    rows: Sequence[CuadEvaluationRow],
+    title: str,
+    y_label: str,
+) -> Path:
+    grouped = group_rows_by_policy(rows)
+    values = {
+        policy: max(
+            [
+                row.context_removed_ratio
+                for row in policy_rows
+                if not row.significant_degradation
+            ]
+            or [0.0]
+        )
+        for policy, policy_rows in grouped.items()
+    }
+    svg = build_bar_svg(
+        title=title,
+        x_label="Policy",
+        y_label=y_label,
+        values=values,
+        y_min=0.0,
+        y_max=max([*values.values(), 1.0]),
+    )
+    path.write_text(svg, encoding="utf-8")
+    return path
+
+
+def build_line_svg(
+    title: str,
+    x_label: str,
+    y_label: str,
+    series: Dict[str, List[Tuple[float, float]]],
+    y_min: float,
+    y_max: float,
+    percent_y: bool,
+) -> str:
+    width, height = 980, 620
+    margin_left, margin_right, margin_top, margin_bottom = 90, 260, 70, 95
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+
+    def x_coord(value: float) -> float:
+        return margin_left + clamp(value, 0.0, 1.0) * plot_width
+
+    def y_coord(value: float) -> float:
+        if y_max == y_min:
+            return margin_top + plot_height / 2
+        return margin_top + (y_max - value) / (y_max - y_min) * plot_height
+
+    parts = svg_header(width, height, title)
+    parts.extend(draw_axes(width, height, margin_left, margin_top, plot_width, plot_height, x_label, y_label))
+    for tick in [0, 0.25, 0.5, 0.75, 1.0]:
+        x = x_coord(tick)
+        parts.append(f'<line x1="{x:.1f}" y1="{margin_top}" x2="{x:.1f}" y2="{margin_top + plot_height}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{x:.1f}" y="{margin_top + plot_height + 28}" text-anchor="middle" class="tick">{tick:.0%}</text>')
+    for index in range(5):
+        value = y_min + (y_max - y_min) * index / 4
+        y = y_coord(value)
+        label = f"{value:.0f}%" if percent_y else f"{value:.2f}"
+        parts.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{margin_left + plot_width}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="tick">{label}</text>')
+
+    for idx, (policy, points) in enumerate(series.items()):
+        color = chart_color(idx)
+        point_text = " ".join(f"{x_coord(x):.1f},{y_coord(y):.1f}" for x, y in points)
+        parts.append(f'<polyline points="{point_text}" fill="none" stroke="{color}" stroke-width="2.8"/>')
+        for x, y in points:
+            parts.append(f'<circle cx="{x_coord(x):.1f}" cy="{y_coord(y):.1f}" r="4" fill="{color}"/>')
+        legend_y = margin_top + idx * 24
+        legend_x = width - margin_right + 35
+        parts.append(f'<line x1="{legend_x}" y1="{legend_y}" x2="{legend_x + 22}" y2="{legend_y}" stroke="{color}" stroke-width="3"/>')
+        parts.append(f'<text x="{legend_x + 30}" y="{legend_y + 5}" class="legend">{escape(policy)}</text>')
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def build_bar_svg(
+    title: str,
+    x_label: str,
+    y_label: str,
+    values: Dict[str, float],
+    y_min: float,
+    y_max: float,
+) -> str:
+    width, height = 980, 620
+    margin_left, margin_right, margin_top, margin_bottom = 90, 40, 70, 170
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+    policies = list(values)
+    bar_gap = 12
+    bar_width = (plot_width - bar_gap * max(0, len(policies) - 1)) / max(1, len(policies))
+
+    def y_coord(value: float) -> float:
+        return margin_top + (y_max - value) / (y_max - y_min) * plot_height
+
+    parts = svg_header(width, height, title)
+    parts.extend(draw_axes(width, height, margin_left, margin_top, plot_width, plot_height, x_label, y_label))
+    for index in range(5):
+        value = y_min + (y_max - y_min) * index / 4
+        y = y_coord(value)
+        parts.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{margin_left + plot_width}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="tick">{value:.0%}</text>')
+    for idx, policy in enumerate(policies):
+        value = values[policy]
+        x = margin_left + idx * (bar_width + bar_gap)
+        y = y_coord(value)
+        h = margin_top + plot_height - y
+        color = chart_color(idx)
+        parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" height="{h:.1f}" fill="{color}" opacity="0.85"/>')
+        parts.append(f'<text x="{x + bar_width / 2:.1f}" y="{y - 8:.1f}" text-anchor="middle" class="tick">{value:.0%}</text>')
+        parts.append(
+            f'<text transform="translate({x + bar_width / 2:.1f},{height - margin_bottom + 30}) rotate(45)" '
+            f'text-anchor="start" class="tick">{escape(policy)}</text>'
+        )
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def svg_header(width: int, height: int, title: str) -> List[str]:
+    return [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        "<style>",
+        "text { font-family: Arial, Helvetica, sans-serif; fill: #111827; }",
+        ".title { font-size: 22px; font-weight: 700; }",
+        ".axis { font-size: 15px; font-weight: 600; }",
+        ".tick { font-size: 12px; fill: #374151; }",
+        ".legend { font-size: 13px; fill: #111827; }",
+        "</style>",
+        '<rect width="100%" height="100%" fill="white"/>',
+        f'<text x="{width / 2:.1f}" y="34" text-anchor="middle" class="title">{escape(title)}</text>',
+    ]
+
+
+def draw_axes(
+    width: int,
+    height: int,
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_label: str,
+    y_label: str,
+) -> List[str]:
+    axis_y = margin_top + plot_height
+    return [
+        f'<line x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{axis_y}" stroke="#111827" stroke-width="1.5"/>',
+        f'<line x1="{margin_left}" y1="{axis_y}" x2="{margin_left + plot_width}" y2="{axis_y}" stroke="#111827" stroke-width="1.5"/>',
+        f'<text x="{margin_left + plot_width / 2:.1f}" y="{height - 28}" text-anchor="middle" class="axis">{escape(x_label)}</text>',
+        f'<text transform="translate(24,{margin_top + plot_height / 2:.1f}) rotate(-90)" text-anchor="middle" class="axis">{escape(y_label)}</text>',
+    ]
+
+
+def chart_color(index: int) -> str:
+    colors = [
+        "#1f77b4",
+        "#d62728",
+        "#2ca02c",
+        "#9467bd",
+        "#ff7f0e",
+        "#17becf",
+        "#7f7f7f",
+        "#bcbd22",
+    ]
+    return colors[index % len(colors)]
+
+
+def group_rows_by_policy(rows: Sequence[CuadEvaluationRow]) -> Dict[str, List[CuadEvaluationRow]]:
+    grouped: Dict[str, List[CuadEvaluationRow]] = {}
+    for row in rows:
+        grouped.setdefault(row.policy, []).append(row)
+    return grouped
+
+
+def chart_bounds(values: Sequence[float]) -> Tuple[float, float]:
+    if not values:
+        return 0.0, 1.0
+    low = min(values)
+    high = max(values)
+    if low == high:
+        pad = 1.0 if low == 0 else abs(low) * 0.1
+        return low - pad, high + pad
+    pad = (high - low) * 0.08
+    return low - pad, high + pad
 
 
 def parse_prune_ratios(value: str) -> List[float]:
@@ -1055,6 +1335,10 @@ def safe_mean(values: Iterable[float]) -> float:
     return mean(values_list) if values_list else 0.0
 
 
+def clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
+
+
 def normalize_id(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_.:-]+", "_", value).strip("_")
     return normalized[:180] or "contract"
@@ -1091,6 +1375,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--summary-output", default="outputs/cuad_summary.csv")
     parser.add_argument("--details-output", default="outputs/cuad_details.csv")
     parser.add_argument("--report-output", default="outputs/cuad_report.md")
+    parser.add_argument(
+        "--plots-output-dir",
+        default="outputs/cuad_plots",
+        help="Directory for journal-style SVG plots.",
+    )
     return parser
 
 
@@ -1114,7 +1403,8 @@ def main(argv: List[str] | None = None) -> int:
     )
     write_csv(args.summary_output, rows)
     write_csv(args.details_output, details)
-    write_markdown_report(args.report_output, rows)
+    plot_paths = write_journal_plots(args.plots_output_dir, rows)
+    write_markdown_report(args.report_output, rows, plot_paths=plot_paths)
 
     best_safe = max(
         [row for row in rows if not row.significant_degradation],
@@ -1128,6 +1418,8 @@ def main(argv: List[str] | None = None) -> int:
                 "summary_output": args.summary_output,
                 "details_output": args.details_output,
                 "report_output": args.report_output,
+                "plots_output_dir": args.plots_output_dir,
+                "plots": [str(path) for path in plot_paths],
                 "policies": sorted({row.policy for row in rows}),
                 "max_safe_context_removed_ratio": (
                     best_safe.context_removed_ratio if best_safe else 0.0
