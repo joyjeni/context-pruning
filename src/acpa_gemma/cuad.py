@@ -26,8 +26,18 @@ DEFAULT_POLICIES = [
     "hybrid_usage_bm25",
     "bm25_query_relevance",
     "mmr_diverse_relevance",
+    "rrf_bm25_textrank",
+    "dpp_diverse_relevance",
+    "late_interaction_maxsim",
 ]
 NOVEL_POLICIES = {"usage_driven", "hybrid_usage_bm25"}
+SOTA_BASELINE_POLICIES = [
+    "bm25_query_relevance",
+    "mmr_diverse_relevance",
+    "rrf_bm25_textrank",
+    "dpp_diverse_relevance",
+    "late_interaction_maxsim",
+]
 
 
 @dataclass
@@ -95,6 +105,9 @@ class CuadEvaluationRow:
     citation_improvement_pct: float = 0.0
     answer_quality_improvement_pct: float = 0.0
     combined_improvement_pct: float = 0.0
+    sota_baselines_compared: int = 0
+    sota_win_count: int = 0
+    sota_win_rate: float = 0.0
 
 
 @dataclass
@@ -536,6 +549,12 @@ def retain_sections_for_policy(
             ranked = rank_sections_bm25(question.question, contract.sections)
         elif policy == "mmr_diverse_relevance":
             ranked = rank_sections_mmr(question.question, contract.sections)
+        elif policy == "rrf_bm25_textrank":
+            ranked = rank_sections_rrf_bm25_textrank(question.question, contract.sections)
+        elif policy == "dpp_diverse_relevance":
+            ranked = rank_sections_dpp(question.question, contract.sections)
+        elif policy == "late_interaction_maxsim":
+            ranked = rank_sections_late_interaction_maxsim(question.question, contract.sections)
         elif policy == "hybrid_usage_bm25":
             ranked = rank_sections_hybrid_usage_bm25(
                 question.question,
@@ -625,6 +644,117 @@ def rank_sections_hybrid_usage_bm25(
     return sorted(ranked, key=lambda section: (section.utility_score, -section.ordinal), reverse=True)
 
 
+def rank_sections_rrf_bm25_textrank(
+    query: str,
+    sections: Sequence[CuadSection],
+    rrf_k: int = 60,
+) -> List[CuadSection]:
+    """Reciprocal-rank fusion of query BM25 and TextRank-style centrality."""
+
+    bm25_ranked = rank_sections_bm25(query, sections)
+    textrank_ranked = rank_sections_textrank(sections)
+    fused_scores: Dict[str, float] = {}
+    for ranked in [bm25_ranked, textrank_ranked]:
+        for rank, section in enumerate(ranked, start=1):
+            fused_scores[section.id] = fused_scores.get(section.id, 0.0) + 1 / (rrf_k + rank)
+    fused = [clone_section(section, fused_scores.get(section.id, 0.0)) for section in sections]
+    return sorted(fused, key=lambda section: (section.utility_score, -section.ordinal), reverse=True)
+
+
+def rank_sections_textrank(
+    sections: Sequence[CuadSection],
+    candidate_limit: int = 120,
+) -> List[CuadSection]:
+    """Lightweight TextRank/PageRank centrality over section token overlap."""
+
+    candidates = list(sections[:candidate_limit])
+    tail = list(sections[candidate_limit:])
+    token_sets = {section.id: token_set(section.text) for section in candidates}
+    scores = {section.id: 1.0 for section in candidates}
+    damping = 0.85
+    for _ in range(12):
+        next_scores: Dict[str, float] = {}
+        for section in candidates:
+            incoming = 0.0
+            for other in candidates:
+                if other.id == section.id:
+                    continue
+                similarity = jaccard_similarity(token_sets[section.id], token_sets[other.id])
+                if similarity:
+                    incoming += similarity * scores[other.id]
+            next_scores[section.id] = (1 - damping) + damping * incoming
+        scores = normalize_scores(next_scores)
+    ranked = [clone_section(section, scores.get(section.id, 0.0)) for section in candidates]
+    ranked.extend(clone_section(section, 0.0) for section in tail)
+    return sorted(ranked, key=lambda section: (section.utility_score, -section.ordinal), reverse=True)
+
+
+def rank_sections_dpp(
+    query: str,
+    sections: Sequence[CuadSection],
+    candidate_limit: int = 100,
+    diversity_weight: float = 0.35,
+) -> List[CuadSection]:
+    """DPP-inspired greedy ranking for relevance with novelty/diversity."""
+
+    relevance = normalize_scores(bm25_scores(query, sections))
+    candidates = sorted(
+        [clone_section(section, relevance.get(section.id, 0.0)) for section in sections],
+        key=lambda section: (section.utility_score, -section.ordinal),
+        reverse=True,
+    )
+    active = candidates[: min(candidate_limit, len(candidates))]
+    tail = candidates[len(active):]
+    active_tokens = [token_set(section.text) for section in active]
+    selected: List[CuadSection] = []
+    selected_tokens: List[Set[str]] = []
+    while active:
+        best_index = 0
+        best_score = float("-inf")
+        for index, section in enumerate(active):
+            redundancy = max(
+                [jaccard_similarity(active_tokens[index], tokens) for tokens in selected_tokens]
+                or [0.0]
+            )
+            novelty = 1 - redundancy
+            score = section.utility_score + diversity_weight * novelty
+            if score > best_score:
+                best_score = score
+                best_index = index
+        chosen = active.pop(best_index)
+        chosen_tokens = active_tokens.pop(best_index)
+        chosen.utility_score = best_score
+        selected.append(chosen)
+        selected_tokens.append(chosen_tokens)
+    return selected + tail
+
+
+def rank_sections_late_interaction_maxsim(
+    query: str,
+    sections: Sequence[CuadSection],
+) -> List[CuadSection]:
+    """ColBERT-style lexical MaxSim approximation without embedding deps."""
+
+    query_terms = token_list(query)
+    if not query_terms:
+        return [clone_section(section, 0.0) for section in sections]
+    query_bigrams = set(zip(query_terms, query_terms[1:]))
+    idf = inverse_document_frequency(query_terms, sections)
+    ranked: List[CuadSection] = []
+    for section in sections:
+        terms = token_list(section.text)
+        term_set = set(terms)
+        bigrams = set(zip(terms, terms[1:]))
+        maxsim = 0.0
+        for term in query_terms:
+            if term in term_set:
+                maxsim += idf.get(term, 1.0)
+        bigram_bonus = len(query_bigrams & bigrams) * 0.35
+        length_norm = max(1.0, token_count(section.text) ** 0.25)
+        ranked.append(clone_section(section, (maxsim + bigram_bonus) / length_norm))
+    return sorted(ranked, key=lambda section: (section.utility_score, -section.ordinal), reverse=True)
+
+
 def bm25_scores(query: str, sections: Sequence[CuadSection]) -> Dict[str, float]:
     query_terms = [term for term in token_set(query) if term]
     if not query_terms or not sections:
@@ -662,6 +792,19 @@ def bm25_scores(query: str, sections: Sequence[CuadSection]) -> Dict[str, float]
     return scores
 
 
+def inverse_document_frequency(
+    terms: Sequence[str],
+    sections: Sequence[CuadSection],
+) -> Dict[str, float]:
+    section_term_sets = [token_set(section.text) for section in sections]
+    doc_count = len(sections)
+    idf: Dict[str, float] = {}
+    for term in set(terms):
+        df = sum(1 for section_terms in section_term_sets if term in section_terms)
+        idf[term] = 1.0 + max(0.0, (doc_count - df + 0.5) / (df + 0.5))
+    return idf
+
+
 def annotate_policy_improvements(rows: Sequence[CuadEvaluationRow]) -> None:
     """Annotate novel policy rows versus best non-usage policy at same ratio."""
 
@@ -670,7 +813,7 @@ def annotate_policy_improvements(rows: Sequence[CuadEvaluationRow]) -> None:
         by_ratio.setdefault(row.prune_ratio, []).append(row)
 
     for ratio_rows in by_ratio.values():
-        baselines = [row for row in ratio_rows if row.policy not in NOVEL_POLICIES]
+        baselines = [row for row in ratio_rows if row.policy in SOTA_BASELINE_POLICIES]
         if not baselines:
             continue
         best_baseline = max(
@@ -693,11 +836,21 @@ def annotate_policy_improvements(rows: Sequence[CuadEvaluationRow]) -> None:
                 row.citation_accuracy + row.answer_quality,
                 best_baseline.citation_accuracy + best_baseline.answer_quality,
             )
+            row.sota_baselines_compared = len(baselines)
+            row.sota_win_count = sum(
+                1
+                for baseline in baselines
+                if (row.citation_accuracy + row.answer_quality)
+                > (baseline.citation_accuracy + baseline.answer_quality)
+            )
+            row.sota_win_rate = safe_ratio(row.sota_win_count, len(baselines))
 
 
 def policy_family(policy: str) -> str:
     if policy in NOVEL_POLICIES:
         return "usage_driven"
+    if policy in SOTA_BASELINE_POLICIES:
+        return "sota_dynamic_baseline"
     return "dynamic_baseline"
 
 
@@ -776,20 +929,36 @@ def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -
     if best_improvement and best_improvement.baseline_policy:
         lines.extend(
             [
-                "## Novel-policy improvement over dynamic baselines",
+                "## Novel-policy improvement over five SOTA-style baselines",
                 "",
                 (
                     f"Best combined improvement: **{best_improvement.combined_improvement_pct:.1f}%** "
                     f"for `{best_improvement.policy}` over `{best_improvement.baseline_policy}` "
                     f"at prune_ratio={best_improvement.prune_ratio:.2f}."
                 ),
+                (
+                    f"At that point it outperformed **{best_improvement.sota_win_count}/"
+                    f"{best_improvement.sota_baselines_compared}** SOTA-style baselines."
+                ),
                 "",
             ]
         )
     lines.extend(
         [
-            "| Policy | Prune ratio | Removed | Citation accuracy | Answer quality | Improvement vs baseline | Significant degradation |",
-            "|---|---:|---:|---:|---:|---:|:---:|",
+            "Compared SOTA-style baselines:",
+            "",
+            "- `bm25_query_relevance`: Okapi BM25 sparse retrieval.",
+            "- `mmr_diverse_relevance`: Maximal Marginal Relevance diversity pruning.",
+            "- `rrf_bm25_textrank`: Reciprocal-rank fusion of BM25 and TextRank centrality.",
+            "- `dpp_diverse_relevance`: DPP-inspired relevance plus novelty selection.",
+            "- `late_interaction_maxsim`: ColBERT-style lexical MaxSim approximation.",
+            "",
+        ]
+    )
+    lines.extend(
+        [
+            "| Policy | Prune ratio | Removed | Citation accuracy | Answer quality | Improvement vs best SOTA | SOTA wins | Significant degradation |",
+            "|---|---:|---:|---:|---:|---:|---:|:---:|",
         ]
     )
     for row in rows:
@@ -797,6 +966,7 @@ def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -
             f"| {row.policy} | {row.prune_ratio:.2f} | {row.context_removed_ratio:.3f} | "
             f"{row.citation_accuracy:.3f} | {row.answer_quality:.3f} | "
             f"{row.combined_improvement_pct:.1f}% | "
+            f"{row.sota_win_count}/{row.sota_baselines_compared} | "
             f"{'yes' if row.significant_degradation else 'no'} |"
         )
     lines.extend(
@@ -808,11 +978,12 @@ def write_markdown_report(path: str | Path, rows: Sequence[CuadEvaluationRow]) -
             "  gold answer section remains after pruning.",
             "- **Answer quality**: token-F1 proxy between gold answer spans and retained",
             "  context. It measures answer-span coverage without calling an LLM.",
-            "- **Improvement vs baseline**: percentage lift for usage-driven policies",
-            "  over the best non-usage dynamic baseline at the same prune ratio.",
+            "- **Improvement vs best SOTA**: percentage lift for usage-driven policies",
+            "  over the best non-usage SOTA-style baseline at the same prune ratio.",
+            "- **SOTA wins**: number of the five baseline policies beaten by the",
+            "  usage-driven method on citation+answer-quality score.",
             "- **Significant degradation**: citation or answer-quality drop above the",
             "  configured tolerance relative to no pruning.",
-            "- **Dynamic baselines**: BM25 query relevance and MMR diverse relevance.",
         ]
     )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -913,7 +1084,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=",".join(DEFAULT_POLICIES),
         help=(
             "Comma-separated policies: usage_driven, hybrid_usage_bm25, "
-            "bm25_query_relevance, mmr_diverse_relevance."
+            "bm25_query_relevance, mmr_diverse_relevance, rrf_bm25_textrank, "
+            "dpp_diverse_relevance, late_interaction_maxsim."
         ),
     )
     parser.add_argument("--summary-output", default="outputs/cuad_summary.csv")

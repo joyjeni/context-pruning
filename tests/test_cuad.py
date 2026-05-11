@@ -3,6 +3,7 @@ import zipfile
 from pathlib import Path
 
 from acpa_gemma.cuad import (
+    SOTA_BASELINE_POLICIES,
     UsageDrivenContextPruner,
     evaluate_usage_pruning,
     gold_answer_sections,
@@ -109,13 +110,18 @@ def test_evaluate_usage_pruning_reports_degradation_rows(tmp_path: Path):
         degradation_tolerance=0.05,
     )
 
-    assert {"usage_driven", "hybrid_usage_bm25", "bm25_query_relevance", "mmr_diverse_relevance"} == {
+    assert {"usage_driven", "hybrid_usage_bm25", *SOTA_BASELINE_POLICIES} == {
         row.policy for row in rows
     }
     usage_rows = [row for row in rows if row.policy == "usage_driven"]
     assert [row.prune_ratio for row in usage_rows] == [0.0, 0.5]
     assert usage_rows[0].citation_accuracy >= usage_rows[1].citation_accuracy
     assert any(row.baseline_policy for row in rows if row.policy == "usage_driven")
+    assert all(
+        row.sota_baselines_compared == len(SOTA_BASELINE_POLICIES)
+        for row in rows
+        if row.policy == "usage_driven"
+    )
     assert details
     assert {row.policy for row in details}
 
@@ -133,7 +139,7 @@ def test_cuad_cli_writes_outputs(tmp_path: Path):
             "--prune-ratios",
             "0,0.5",
             "--policies",
-            "usage_driven,bm25_query_relevance",
+            "usage_driven,bm25_query_relevance,late_interaction_maxsim",
             "--summary-output",
             str(tmp_path / "summary.csv"),
             "--details-output",
@@ -147,6 +153,7 @@ def test_cuad_cli_writes_outputs(tmp_path: Path):
     summary = (tmp_path / "summary.csv").read_text(encoding="utf-8")
     assert "policy,policy_family,prune_ratio" in summary
     assert "combined_improvement_pct" in summary
+    assert "sota_win_rate" in summary
     assert "CUAD Usage-Driven Context Pruning Report" in (
         tmp_path / "report.md"
     ).read_text(encoding="utf-8")
